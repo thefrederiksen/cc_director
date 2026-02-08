@@ -134,6 +134,86 @@ public class ActivityStateTests : IDisposable
     }
 
     [Fact]
+    public void HandlePipeEvent_PreToolUse_SetsWorking()
+    {
+        var session = CreateTestSession();
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "PreToolUse", ToolName = "Read" });
+        Assert.Equal(ActivityState.Working, session.ActivityState);
+    }
+
+    [Fact]
+    public void HandlePipeEvent_PostToolUse_SetsWorking()
+    {
+        var session = CreateTestSession();
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "PostToolUse", ToolName = "Read" });
+        Assert.Equal(ActivityState.Working, session.ActivityState);
+    }
+
+    [Fact]
+    public void HandlePipeEvent_PostToolUseFailure_SetsWorking()
+    {
+        var session = CreateTestSession();
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "PostToolUseFailure", ToolName = "Bash" });
+        Assert.Equal(ActivityState.Working, session.ActivityState);
+    }
+
+    [Fact]
+    public void HandlePipeEvent_PermissionRequest_SetsWaitingForPerm()
+    {
+        var session = CreateTestSession();
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "PermissionRequest" });
+        Assert.Equal(ActivityState.WaitingForPerm, session.ActivityState);
+    }
+
+    [Fact]
+    public void HandlePipeEvent_SubagentStart_SetsWorking()
+    {
+        var session = CreateTestSession();
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "SubagentStart" });
+        Assert.Equal(ActivityState.Working, session.ActivityState);
+    }
+
+    [Fact]
+    public void HandlePipeEvent_SubagentStop_SetsWorking()
+    {
+        var session = CreateTestSession();
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "SubagentStop" });
+        Assert.Equal(ActivityState.Working, session.ActivityState);
+    }
+
+    [Fact]
+    public void HandlePipeEvent_TaskCompleted_SetsWorking()
+    {
+        var session = CreateTestSession();
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "TaskCompleted" });
+        Assert.Equal(ActivityState.Working, session.ActivityState);
+    }
+
+    [Fact]
+    public void HandlePipeEvent_TeammateIdle_DoesNotChangeState()
+    {
+        var session = CreateTestSession();
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "TeammateIdle" });
+        Assert.Equal(ActivityState.WaitingForInput, session.ActivityState);
+    }
+
+    [Fact]
+    public void HandlePipeEvent_PreCompact_DoesNotChangeState()
+    {
+        var session = CreateTestSession();
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "PreCompact" });
+        Assert.Equal(ActivityState.WaitingForInput, session.ActivityState);
+    }
+
+    [Fact]
     public void HandlePipeEvent_UnknownEvent_DoesNotChangeState()
     {
         var session = CreateTestSession();

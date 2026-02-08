@@ -37,7 +37,7 @@ public sealed class SessionManager : IDisposable
 
         try
         {
-            string args = claudeArgs ?? string.Empty;
+            string args = claudeArgs ?? _options.DefaultClaudeArgs ?? string.Empty;
             processHost.Start(_options.ClaudePath, args, repoPath);
             session.Status = SessionStatus.Running;
 

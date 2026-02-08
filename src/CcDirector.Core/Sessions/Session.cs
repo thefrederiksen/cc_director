@@ -88,15 +88,37 @@ public sealed class Session : IDisposable
         {
             "Stop" => ActivityState.WaitingForInput,
             "UserPromptSubmit" => ActivityState.Working,
+            "PreToolUse" => ActivityState.Working,
+            "PostToolUse" => ActivityState.Working,
+            "PostToolUseFailure" => ActivityState.Working,
+            "PermissionRequest" => ActivityState.WaitingForPerm,
             "Notification" when msg.NotificationType == "permission_prompt" => ActivityState.WaitingForPerm,
             "Notification" => ActivityState.WaitingForInput,
+            "SubagentStart" => ActivityState.Working,
+            "SubagentStop" => ActivityState.Working,
+            "TaskCompleted" => ActivityState.Working,
             "SessionStart" => ActivityState.Idle,
             "SessionEnd" => ActivityState.Exited,
+            "TeammateIdle" => (ActivityState?)null,
+            "PreCompact" => (ActivityState?)null,
             _ => (ActivityState?)null
         };
 
-        if (newState.HasValue)
-            SetActivityState(newState.Value);
+        if (!newState.HasValue)
+            return;
+
+        // Once we're waiting for user input (green), only explicit user actions
+        // or session end can change the state. This prevents late subagent stops
+        // from incorrectly turning the indicator blue.
+        if (ActivityState == ActivityState.WaitingForInput)
+        {
+            var allowedFromWaiting = msg.HookEventName is "UserPromptSubmit" or "SessionEnd" or "PermissionRequest"
+                || (msg.HookEventName == "Notification" && msg.NotificationType == "permission_prompt");
+            if (!allowedFromWaiting)
+                return;
+        }
+
+        SetActivityState(newState.Value);
     }
 
     private void SetActivityState(ActivityState newState)

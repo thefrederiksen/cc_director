@@ -35,11 +35,16 @@ public class HookInstallerTests : IDisposable
         var root = JsonNode.Parse(json)!;
         var hooks = root["hooks"]!.AsObject();
 
-        Assert.True(hooks.ContainsKey("Stop"));
-        Assert.True(hooks.ContainsKey("Notification"));
-        Assert.True(hooks.ContainsKey("UserPromptSubmit"));
-        Assert.True(hooks.ContainsKey("SessionStart"));
-        Assert.True(hooks.ContainsKey("SessionEnd"));
+        var expectedHooks = new[]
+        {
+            "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+            "PostToolUseFailure", "PermissionRequest", "Notification",
+            "SubagentStart", "SubagentStop", "Stop", "TeammateIdle",
+            "TaskCompleted", "PreCompact", "SessionEnd"
+        };
+        Assert.Equal(14, expectedHooks.Length);
+        foreach (var name in expectedHooks)
+            Assert.True(hooks.ContainsKey(name), $"Missing hook: {name}");
 
         // Verify structure
         var stopArray = hooks["Stop"]!.AsArray();

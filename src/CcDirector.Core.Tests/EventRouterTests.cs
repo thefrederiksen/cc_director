@@ -41,7 +41,7 @@ public class EventRouterTests : IDisposable
         _router.Route(msg);
 
         Assert.Equal("claude-abc-123", session.ClaudeSessionId);
-        Assert.Equal(ActivityState.Idle, session.ActivityState);
+        Assert.Equal(ActivityState.WaitingForInput, session.ActivityState);
     }
 
     [Fact]

@@ -9,7 +9,13 @@ namespace CcDirector.Core.Hooks;
 /// </summary>
 public static class HookInstaller
 {
-    private static readonly string[] HookEvents = { "Stop", "Notification", "UserPromptSubmit", "SessionStart", "SessionEnd" };
+    private static readonly string[] HookEvents =
+    {
+        "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+        "PostToolUseFailure", "PermissionRequest", "Notification",
+        "SubagentStart", "SubagentStop", "Stop", "TeammateIdle",
+        "TaskCompleted", "PreCompact", "SessionEnd"
+    };
 
     /// <summary>
     /// Install Director hooks into Claude's settings.json.
