@@ -37,11 +37,11 @@ public class ActivityStateTests : IDisposable
     }
 
     [Fact]
-    public void HandlePipeEvent_Stop_SetsIdle()
+    public void HandlePipeEvent_Stop_SetsWaitingForInput()
     {
         var session = CreateTestSession();
         session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" });
-        Assert.Equal(ActivityState.Idle, session.ActivityState);
+        Assert.Equal(ActivityState.WaitingForInput, session.ActivityState);
     }
 
     [Fact]
@@ -115,12 +115,12 @@ public class ActivityStateTests : IDisposable
     public void HandlePipeEvent_SameState_DoesNotFireEvent()
     {
         var session = CreateTestSession();
-        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → Idle
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
 
         int eventCount = 0;
         session.OnActivityStateChanged += (_, _) => eventCount++;
 
-        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → Idle again (same)
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput again (same)
         Assert.Equal(0, eventCount);
     }
 
@@ -128,7 +128,7 @@ public class ActivityStateTests : IDisposable
     public void SendText_SetsWorking()
     {
         var session = CreateTestSession();
-        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → Idle
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
         session.SendText("hello");
         Assert.Equal(ActivityState.Working, session.ActivityState);
     }
@@ -137,9 +137,9 @@ public class ActivityStateTests : IDisposable
     public void HandlePipeEvent_UnknownEvent_DoesNotChangeState()
     {
         var session = CreateTestSession();
-        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → Idle
+        session.HandlePipeEvent(new PipeMessage { HookEventName = "Stop" }); // → WaitingForInput
         session.HandlePipeEvent(new PipeMessage { HookEventName = "SomeUnknownEvent" });
-        Assert.Equal(ActivityState.Idle, session.ActivityState);
+        Assert.Equal(ActivityState.WaitingForInput, session.ActivityState);
     }
 
     public void Dispose()

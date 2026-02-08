@@ -86,7 +86,7 @@ public sealed class Session : IDisposable
     {
         var newState = msg.HookEventName switch
         {
-            "Stop" => ActivityState.Idle,
+            "Stop" => ActivityState.WaitingForInput,
             "UserPromptSubmit" => ActivityState.Working,
             "Notification" when msg.NotificationType == "permission_prompt" => ActivityState.WaitingForPerm,
             "Notification" => ActivityState.WaitingForInput,
