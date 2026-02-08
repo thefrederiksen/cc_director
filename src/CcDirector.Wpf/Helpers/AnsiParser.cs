@@ -32,6 +32,11 @@ public class AnsiParser
     private bool _hasParam;
     private char _intermediateChar;
 
+    // UTF-8 decoding
+    private readonly byte[] _utf8Buf = new byte[4];
+    private int _utf8Needed;  // remaining continuation bytes expected
+    private int _utf8Len;     // bytes collected so far
+
     private enum ParserState
     {
         Ground,
@@ -107,6 +112,30 @@ public class AnsiParser
 
     private void HandleGround(byte b)
     {
+        // If we're in the middle of a UTF-8 multi-byte sequence, accumulate
+        if (_utf8Needed > 0)
+        {
+            if ((b & 0xC0) == 0x80) // Valid continuation byte
+            {
+                _utf8Buf[_utf8Len++] = b;
+                _utf8Needed--;
+                if (_utf8Needed == 0)
+                {
+                    // Decode the complete UTF-8 sequence
+                    var str = System.Text.Encoding.UTF8.GetString(_utf8Buf, 0, _utf8Len);
+                    foreach (char ch in str)
+                        PutChar(ch);
+                }
+                return;
+            }
+            else
+            {
+                // Invalid continuation - discard partial sequence and re-process this byte
+                _utf8Needed = 0;
+                _utf8Len = 0;
+            }
+        }
+
         switch (b)
         {
             case 0x1B: // ESC
@@ -133,10 +162,31 @@ public class AnsiParser
                 _cursorCol = 0;
                 break;
             default:
-                if (b >= 0x20) // Printable
+                if (b <= 0x7F)
                 {
-                    PutChar((char)b);
+                    // Single-byte ASCII
+                    if (b >= 0x20)
+                        PutChar((char)b);
                 }
+                else if ((b & 0xE0) == 0xC0) // 2-byte UTF-8 lead: 110xxxxx
+                {
+                    _utf8Buf[0] = b;
+                    _utf8Len = 1;
+                    _utf8Needed = 1;
+                }
+                else if ((b & 0xF0) == 0xE0) // 3-byte UTF-8 lead: 1110xxxx
+                {
+                    _utf8Buf[0] = b;
+                    _utf8Len = 1;
+                    _utf8Needed = 2;
+                }
+                else if ((b & 0xF8) == 0xF0) // 4-byte UTF-8 lead: 11110xxx
+                {
+                    _utf8Buf[0] = b;
+                    _utf8Len = 1;
+                    _utf8Needed = 3;
+                }
+                // else: stray continuation byte (0x80-0xBF) - ignore
                 break;
         }
     }
