@@ -226,16 +226,27 @@
                          Padding="8,6"
                          FontFamily="Cascadia Mono, Consolas, Courier New"
                          FontSize="13"
-                         KeyDown="PromptInput_KeyDown" />
-                <Button Grid.Column="1" Content="Send"
-                        Click="BtnSendPrompt_Click"
-                        Width="60" Margin="8,0,0,0"
-                        VerticalAlignment="Bottom"
-                        Height="30"
-                        Background="{StaticResource AccentBrush}"
-                        Foreground="White"
-                        BorderThickness="0"
-                        Cursor="Hand" />
+                         KeyDown="PromptInput_KeyDown"
+                         GotFocus="PromptInput_GotFocus" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                    <Button Content="Send"
+                            Click="BtnSendPrompt_Click"
+                            Width="60" Margin="8,0,0,0"
+                            Height="30"
+                            Background="{StaticResource AccentBrush}"
+                            Foreground="White"
+                            BorderThickness="0"
+                            Cursor="Hand" />
+                    <Button Content="&#x21bb;" Click="BtnRefreshConsole_Click"
+                            Width="30" Margin="4,0,0,0"
+                            Height="30"
+                            Background="{StaticResource ButtonBackground}"
+                            Foreground="{StaticResource TextForeground}"
+                            BorderThickness="0"
+                            Cursor="Hand"
+                            ToolTip="Reposition console overlay"
+                            FontSize="16" />
+                </StackPanel>
             </Grid>
         </Border>
     </Grid>

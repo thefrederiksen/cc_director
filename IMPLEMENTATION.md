@@ -42,6 +42,7 @@ D:\ReposFred\cc_director\
 |   |   +-- MainWindow.xaml / .xaml.cs       3-panel layout + SessionViewModel + PipeMessageViewModel
 |   |   +-- NewSessionDialog.xaml / .xaml.cs Repo picker + folder browse dialog
 |   |   +-- Controls/
+|   |   |   +-- EmbeddedConsoleHost.cs      Overlay console: spawn, position, input, lifecycle + static registry
 |   |   |   +-- TerminalControl.cs          Custom WPF terminal renderer (DrawingVisual, 50ms poll)
 |   |   +-- Helpers/
 |   |   |   +-- AnsiParser.cs               VT100/ANSI parser -> TerminalCell grid + scrollback
@@ -246,6 +247,10 @@ Right sidebar showing a live scrolling log of every hook event received through 
 - [x] **Configuration** — `appsettings.json` with Agent options and Repositories list
 - [x] **Orphan detection** — `ScanForOrphans()` on startup detects leftover claude.exe processes
 - [x] **Test suite** — xUnit tests for buffer, pipe server, event router, hook installer, activity state (53 tests)
+- [x] **Embedded console overlay** — `EmbeddedConsoleHost` spawns claude.exe as a borderless top-level console window positioned over the WPF `TerminalArea` border. Full TUI rendering, native keyboard input, and `WriteConsoleInput` for prompt-box text injection.
+- [x] **Overlay process cleanup** — Static `ConcurrentDictionary` registry in `EmbeddedConsoleHost` tracks all living instances. `DisposeAll()` called from `App.OnExit` kills every embedded console process on shutdown. `MainWindow.OnClosing` calls `DetachTerminal()` as defense-in-depth.
+- [x] **Overlay Z-order on app switch** — `MainWindow.Activated` event handler re-shows and repositions the console overlay when the WPF window regains focus after alt-tabbing to another application.
+- [x] **Overlay non-activation during drag/resize** — All `SetWindowPos` calls on the console overlay use `SWP_NOACTIVATE` to prevent the console from stealing focus during WPF window drag and resize operations.
 
 ### 6.2 To Do
 
@@ -486,6 +491,8 @@ Microsoft.Extensions.Configuration.Binder
 - **`WS_CHILD` breaks input:** Setting `WS_CHILD` style and reparenting with `SetParent` prevents keyboard messages from being dispatched to the console's message loop.
 - **Overlay approach:** Keep the console as a top-level window, strip `WS_CAPTION` / `WS_THICKFRAME` for borderless look, set `WS_EX_TOOLWINDOW` to hide from taskbar/alt-tab, then use `MoveWindow` to position it over the WPF `TerminalArea` border.
 - **`WriteConsoleInput`:** Injects `KEY_EVENT_RECORD` structs directly into the console input buffer — enables sending text from the WPF prompt box to the console without focus/keyboard issues.
+- **`SWP_NOACTIVATE` is critical for overlays:** Any `SetWindowPos` call on the overlay must include `SWP_NOACTIVATE` (0x0010) or it will steal focus from the WPF window. Without it, window dragging and resizing break because each repositioning event activates the console.
+- **Overlay Z-order on app switch:** A top-level overlay window with `GWL_HWNDPARENT` ownership stays above the WPF window, but loses Z-order when the app is deactivated. Must handle `Window.Activated` to `Show()` and reposition the overlay when the WPF window regains focus.
 
 ### Overlay Approach — Verified Working (2026-02-09)
 
@@ -493,11 +500,22 @@ The overlay console approach is confirmed working:
 
 - **TUI rendering:** Claude Code's full TUI renders correctly (progress bars, tool output, colored text, permission prompts)
 - **Text input via prompt box:** `WriteConsoleInput` successfully injects text + Enter into Claude's prompt. Tested with multi-word commands.
-- **Window positioning:** Console tracks the WPF `TerminalArea` border on move/resize
+- **Window positioning:** Console tracks the WPF `TerminalArea` border on move/resize. Uses `SWP_NOACTIVATE` to avoid stealing focus during drag/resize.
+- **Window dragging:** WPF window can be freely dragged by the title bar — overlay follows without interfering.
+- **App switching (alt-tab):** Console overlay re-appears and repositions when the WPF window is activated after switching to another application.
+- **Process cleanup:** All embedded console processes are tracked in a static registry and killed on app exit via `DisposeAll()`.
 - **Session state:** Hook events flow through named pipe — activity indicators (Working/WaitingForInput/etc.) update correctly
 - **Pipe messages panel:** All hook events visible in real-time (PreToolUse, PostToolUse, Stop, SubagentStart/Stop, UserPromptSubmit)
 - **Direct keyboard input:** Clicking on the console overlay and typing works — keystrokes reach Claude natively
 
+### Resolved Issues
+
+- **Orphaned console windows on exit (fixed):** Embedded console processes were orphaned when the app exited because `Session.KillAsync()` is a no-op for embedded mode and `MainWindow` only tracked one `_embeddedHost` at a time. **Fix:** Added a static `ConcurrentDictionary<EmbeddedConsoleHost, byte>` registry that tracks all living instances. `DisposeAll()` is called from `App.OnExit` before pipe server / session manager cleanup. `MainWindow.OnClosing` calls `DetachTerminal()` as defense-in-depth.
+
+- **WPF window dragging broken by overlay (fixed):** `SetWindowPos` calls on the console overlay during `LocationChanged` / `SizeChanged` events were activating the console window, stealing focus from the WPF drag operation. **Fix:** Added `SWP_NOACTIVATE` (0x0010) flag to all `SetWindowPos` calls in `UpdatePosition()` and `Show()`.
+
+- **Console overlay disappears after alt-tab (fixed):** When switching to another application and back, the overlay console stayed behind because `StateChanged` only handles minimize/restore, not focus loss from alt-tabbing. **Fix:** Added `Activated` event handler on `MainWindow` that calls `_embeddedHost.Show()` + `DeferConsolePositionUpdate()` to bring the overlay back to top.
+
 ### Known Issues
 
-- **Scrolling:** The console's native scrollbar appears but scrolling behavior is not intuitive — mouse wheel scrolling works but cannot easily scroll to end/bottom of output. Needs investigation (may relate to conhost scroll buffer behavior when `WS_CAPTION` is stripped, or may need scroll-to-bottom keybinding/button).
+- **Scrolling (low priority, not a blocker):** Conhost scrollbar stripped via `WS_VSCROLL`/`WS_HSCROLL` removal, but the underlying scroll buffer still has issues: cannot scroll to end, and the buffer has too much empty space below content allowing over-scrolling. Root cause: conhost manages its own screen buffer (default ~9001 lines) independently from Claude Code's TUI, which uses the alternate screen buffer. The two scroll systems are disconnected — conhost scrollbar scrolls the console buffer, Claude's TUI scrolls its own viewport. Future improvement options: (1) resize the console buffer to match the visible window via `SetConsoleScreenBufferSize`, (2) intercept mouse wheel with `WH_MOUSE_LL` hook and convert to Page Up/Down keystrokes for Claude's TUI, (3) add WPF overlay scroll buttons that inject key events. Keyboard scrolling (Page Up/Down when console has focus) works natively via Claude's TUI.

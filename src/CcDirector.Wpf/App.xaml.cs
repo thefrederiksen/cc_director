@@ -5,6 +5,7 @@ using CcDirector.Core.Configuration;
 using CcDirector.Core.Hooks;
 using CcDirector.Core.Pipes;
 using CcDirector.Core.Sessions;
+using CcDirector.Wpf.Controls;
 
 namespace CcDirector.Wpf;
 
@@ -44,6 +45,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        EmbeddedConsoleHost.DisposeAll();
         PipeServer.Dispose();
         SessionManager.KillAllSessionsAsync().GetAwaiter().GetResult();
         SessionManager.Dispose();

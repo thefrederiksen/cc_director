@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using CcDirector.Core.Pipes;
 using CcDirector.Core.Sessions;
@@ -28,9 +29,17 @@ public partial class MainWindow : Window
         SessionList.ItemsSource = _sessions;
         PipeMessageList.ItemsSource = _pipeMessages;
         Loaded += MainWindow_Loaded;
-        LocationChanged += (_, _) => UpdateConsolePosition();
-        SizeChanged += (_, _) => UpdateConsolePosition();
+        LocationChanged += (_, _) => DeferConsolePositionUpdate();
+        SizeChanged += (_, _) => DeferConsolePositionUpdate();
         StateChanged += MainWindow_StateChanged;
+        Activated += MainWindow_Activated;
+        SessionTabs.SelectionChanged += SessionTabs_SelectionChanged;
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        DetachTerminal();
+        base.OnClosing(e);
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -176,13 +185,17 @@ public partial class MainWindow : Window
             host.StartProcess(app.SessionManager.Options.ClaudePath, args, session.WorkingDirectory);
             session.SetEmbeddedProcessId(host.ProcessId);
 
+            // Set WPF window as owner so console stays above it in Z-order
+            var wpfHwnd = new WindowInteropHelper(this).Handle;
+            host.SetOwner(wpfHwnd);
+
             host.OnProcessExited += exitCode =>
             {
                 session.NotifyEmbeddedProcessExited(exitCode);
             };
 
             // Position console overlay after layout
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, UpdateConsolePosition);
+            DeferConsolePositionUpdate();
         }
         else
         {
@@ -246,7 +259,60 @@ public partial class MainWindow : Window
         {
             _embeddedHost.Show();
             // Reposition after restore
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, UpdateConsolePosition);
+            DeferConsolePositionUpdate();
+        }
+    }
+
+    private void MainWindow_Activated(object? sender, EventArgs e)
+    {
+        if (_embeddedHost == null) return;
+
+        // Bring console overlay back to top when WPF window regains focus
+        _embeddedHost.Show();
+        DeferConsolePositionUpdate();
+    }
+
+    private void DeferConsolePositionUpdate()
+    {
+        Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Render,
+            UpdateConsolePosition);
+    }
+
+    private void SessionTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_embeddedHost == null) return;
+
+        // Terminal tab is index 0 — show overlay only when it's selected
+        if (SessionTabs.SelectedIndex == 0)
+        {
+            _embeddedHost.Show();
+            DeferConsolePositionUpdate();
+        }
+        else
+        {
+            _embeddedHost.Hide();
+        }
+    }
+
+    private void BtnRefreshConsole_Click(object sender, RoutedEventArgs e)
+    {
+        if (_embeddedHost != null)
+        {
+            _embeddedHost.Show();
+            UpdateConsolePosition();
+        }
+    }
+
+    private void PromptInput_GotFocus(object sender, RoutedEventArgs e)
+    {
+        // Re-show console overlay when text box gets focus — covers the case
+        // where the user clicked the console window then clicked back here,
+        // which can cause the console to slip behind the WPF window.
+        if (_embeddedHost != null)
+        {
+            _embeddedHost.Show();
+            DeferConsolePositionUpdate();
         }
     }
 
@@ -276,7 +342,7 @@ public partial class MainWindow : Window
         if (_activeSession.Mode == SessionMode.Embedded && _embeddedHost != null)
         {
             // Send keystrokes directly to the embedded console window
-            _embeddedHost.SendText(text);
+            await _embeddedHost.SendTextAsync(text);
         }
         else
         {
