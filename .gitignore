@@ -14,3 +14,4 @@ tmp_build_output/cc_director.runtimeconfig.json
 tmp_build_output/CcDirector.Core.deps.json
 tmp_build_output/CcDirector.Core.dll
 tmp_build_output/CcDirector.Core.pdb
+.claude/sounds/.current_session
