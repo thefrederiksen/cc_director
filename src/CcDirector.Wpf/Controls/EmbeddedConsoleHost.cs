@@ -173,7 +173,52 @@ public class EmbeddedConsoleHost : IDisposable
 
         LogWindowInfo(_consoleHwnd, "Found console window");
         StripBorders(_consoleHwnd);
+        SetConsoleFont(_process.Id, "Consolas", 16);
         _visible = true;
+    }
+
+    /// <summary>
+    /// Set the console font to a TrueType font (e.g., Consolas) for better readability.
+    /// </summary>
+    private static void SetConsoleFont(int processId, string fontName, short fontSize)
+    {
+        FreeConsole();
+        if (!AttachConsole((uint)processId))
+        {
+            FileLog.Write($"[EmbeddedConsoleHost] SetConsoleFont: AttachConsole failed, error={Marshal.GetLastWin32Error()}");
+            return;
+        }
+
+        try
+        {
+            IntPtr hOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+            if (hOutput == IntPtr.Zero || hOutput == INVALID_HANDLE_VALUE)
+            {
+                FileLog.Write("[EmbeddedConsoleHost] SetConsoleFont: GetStdHandle failed");
+                return;
+            }
+
+            var fontInfo = new CONSOLE_FONT_INFOEX();
+            fontInfo.cbSize = (uint)Marshal.SizeOf<CONSOLE_FONT_INFOEX>();
+            fontInfo.nFont = 0;
+            fontInfo.dwFontSize = new COORD { X = 0, Y = fontSize };
+            fontInfo.FontFamily = 54; // FF_DONTCARE | TMPF_TRUETYPE
+            fontInfo.FontWeight = 400; // FW_NORMAL
+            fontInfo.FaceName = fontName;
+
+            if (SetCurrentConsoleFontEx(hOutput, false, ref fontInfo))
+            {
+                FileLog.Write($"[EmbeddedConsoleHost] SetConsoleFont: Set font to {fontName} size {fontSize}");
+            }
+            else
+            {
+                FileLog.Write($"[EmbeddedConsoleHost] SetConsoleFont: SetCurrentConsoleFontEx failed, error={Marshal.GetLastWin32Error()}");
+            }
+        }
+        finally
+        {
+            FreeConsole();
+        }
     }
 
     /// <summary>
@@ -822,6 +867,7 @@ public class EmbeddedConsoleHost : IDisposable
     private static readonly IntPtr HWND_TOPMOST = new(-1);
     private static readonly IntPtr HWND_NOTOPMOST = new(-2);
     private const int STD_INPUT_HANDLE = -10;
+    private const int STD_OUTPUT_HANDLE = -11;
     private static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
     private const ushort KEY_EVENT = 0x0001;
     private const byte VK_RETURN = 0x0D;
@@ -851,6 +897,12 @@ public class EmbeddedConsoleHost : IDisposable
         INPUT_RECORD[] lpBuffer,
         uint nLength,
         out uint lpNumberOfEventsWritten);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool SetCurrentConsoleFontEx(
+        IntPtr hConsoleOutput,
+        bool bMaximumWindow,
+        ref CONSOLE_FONT_INFOEX lpConsoleCurrentFontEx);
 
     // --- user32 P/Invoke ---
 
@@ -948,5 +1000,24 @@ public class EmbeddedConsoleHost : IDisposable
         public uint dwFlags;
         public uint time;
         public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct COORD
+    {
+        public short X;
+        public short Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct CONSOLE_FONT_INFOEX
+    {
+        public uint cbSize;
+        public uint nFont;
+        public COORD dwFontSize;
+        public uint FontFamily;
+        public uint FontWeight;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string FaceName;
     }
 }
