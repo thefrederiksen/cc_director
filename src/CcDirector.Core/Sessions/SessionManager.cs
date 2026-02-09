@@ -120,6 +120,13 @@ public sealed class SessionManager : IDisposable
         await session.KillAsync(_options.GracefulShutdownTimeoutSeconds * 1000);
     }
 
+    /// <summary>Return PIDs of all tracked embedded sessions.</summary>
+    public HashSet<int> GetTrackedProcessIds()
+        => _sessions.Values
+            .Where(s => s.Mode == SessionMode.Embedded && s.EmbeddedProcessId > 0)
+            .Select(s => s.EmbeddedProcessId)
+            .ToHashSet();
+
     /// <summary>Scan for orphaned claude.exe processes on startup.</summary>
     public void ScanForOrphans()
     {
@@ -218,6 +225,34 @@ public sealed class SessionManager : IDisposable
     }
 
     /// <summary>
+    /// Save state of all running embedded sessions to the store without needing HWNDs.
+    /// Used for incremental persistence during normal operation.
+    /// ConsoleHwnd is written as 0; Reattach discovers the HWND via AttachConsole.
+    /// </summary>
+    public void SaveCurrentState(SessionStateStore store)
+    {
+        var persisted = _sessions.Values
+            .Where(s => s.Mode == SessionMode.Embedded && s.Status == SessionStatus.Running)
+            .Select(s => new PersistedSession
+            {
+                Id = s.Id,
+                RepoPath = s.RepoPath,
+                WorkingDirectory = s.WorkingDirectory,
+                ClaudeArgs = s.ClaudeArgs,
+                CustomName = s.CustomName,
+                EmbeddedProcessId = s.EmbeddedProcessId,
+                ConsoleHwnd = 0,
+                ClaudeSessionId = s.ClaudeSessionId,
+                ActivityState = s.ActivityState,
+                CreatedAt = s.CreatedAt,
+            })
+            .ToList();
+
+        store.Save(persisted);
+        _log?.Invoke($"Saved {persisted.Count} session(s) to state store.");
+    }
+
+    /// <summary>
     /// Save state of all running embedded sessions to the store.
     /// The getHwnd delegate maps session ID → console HWND (as long), provided by the WPF layer.
     /// </summary>
@@ -294,6 +329,10 @@ public sealed class SessionManager : IDisposable
         }
 
         _log?.Invoke($"Loaded {restored.Count}/{persisted.Count} persisted session(s).");
+
+        // Re-save with only the live sessions (prunes dead entries)
+        store.Save(restored.Select(r => r.Item2).ToList());
+
         return restored;
     }
 

@@ -71,9 +71,9 @@ public partial class App : Application
         SessionManager.ScanForOrphans();
 
         // Restore persisted sessions (before pipe server starts, so EventRouter can find them)
+        // LoadPersistedSessions validates PIDs and re-saves only live sessions.
         var restored = SessionManager.LoadPersistedSessions(SessionStateStore);
         RestoredPersistedData = restored.Select(r => r.Persisted).ToList();
-        SessionStateStore.Clear(); // prevent stale re-reads on crash
 
         // Start pipe server and event router
         PipeServer = new DirectorPipeServer(log);

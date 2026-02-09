@@ -206,6 +206,7 @@ public partial class MainWindow : Window
                 var vm = CreateSession(dialog.SelectedPath);
                 if (vm == null) return;
                 vm.Rename(dialog.SelectedCustomName);
+                PersistSessionState();
                 recentStore.Add(dialog.SelectedPath, dialog.SelectedCustomName);
             }
             else
@@ -254,6 +255,7 @@ public partial class MainWindow : Window
             }
 
             await _sessionManager.KillSessionAsync(vm.Session.Id);
+            PersistSessionState();
 
             // Detach terminal if this was the active session
             if (_activeSession?.Id == vm.Session.Id)
@@ -304,6 +306,7 @@ public partial class MainWindow : Window
             // Remove from UI and manager
             _sessions.Remove(vm);
             _sessionManager.RemoveSession(vm.Session.Id);
+            PersistSessionState();
         }
         catch (Exception ex)
         {
@@ -361,6 +364,7 @@ public partial class MainWindow : Window
                 string args = session.ClaudeArgs ?? string.Empty;
                 host.StartProcess(app.SessionManager.Options.ClaudePath, args, session.WorkingDirectory);
                 session.SetEmbeddedProcessId(host.ProcessId);
+                PersistSessionState();
 
                 // Set WPF window as owner so console stays above it in Z-order
                 var wpfHwnd = new WindowInteropHelper(this).Handle;
@@ -559,6 +563,19 @@ public partial class MainWindow : Window
         PromptInput.Focus();
     }
 
+    private void PersistSessionState()
+    {
+        try
+        {
+            var app = (App)Application.Current;
+            _sessionManager.SaveCurrentState(app.SessionStateStore);
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[MainWindow] PersistSessionState error: {ex.Message}");
+        }
+    }
+
     private void OnPipeMessageReceived(PipeMessage msg)
     {
         Dispatcher.BeginInvoke(() =>
@@ -576,44 +593,166 @@ public partial class MainWindow : Window
         });
     }
 
-    private void BtnScanProcesses_Click(object sender, RoutedEventArgs e)
+    private void BtnReconnect_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            var processes = Process.GetProcesses()
-                .OrderBy(p => p.ProcessName, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            var trackedPids = _sessionManager.GetTrackedProcessIds();
+            var claudeProcesses = Process.GetProcessesByName("claude");
+            var orphans = new List<Process>();
 
-            FileLog.Write($"[ScanProcesses] === Process scan: {processes.Length} processes ===");
-            foreach (var proc in processes)
+            foreach (var proc in claudeProcesses)
+            {
+                if (proc.HasExited || trackedPids.Contains(proc.Id))
+                {
+                    proc.Dispose();
+                    continue;
+                }
+                orphans.Add(proc);
+            }
+
+            if (orphans.Count == 0)
+            {
+                MessageBox.Show(this, "No orphaned claude.exe sessions found.",
+                    "Reconnect", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var wpfHwnd = new WindowInteropHelper(this).Handle;
+            var app = (App)Application.Current;
+            var recentSessions = app.RecentSessionStore.GetRecent();
+            int reconnected = 0;
+
+            foreach (var proc in orphans)
             {
                 try
                 {
-                    string title = string.IsNullOrEmpty(proc.MainWindowTitle) ? "" : $" Title=\"{proc.MainWindowTitle}\"";
-                    string hwnd = proc.MainWindowHandle != IntPtr.Zero ? $" HWND=0x{proc.MainWindowHandle:X}" : "";
-                    FileLog.Write($"[ScanProcesses]   PID={proc.Id,-6} {proc.ProcessName}{title}{hwnd}");
+                    var host = EmbeddedConsoleHost.Reattach(proc.Id, IntPtr.Zero);
+                    if (host == null)
+                    {
+                        FileLog.Write($"[Reconnect] Could not reattach to PID {proc.Id}, skipping.");
+                        continue;
+                    }
+
+                    // Try to extract repo path from the console window title
+                    string repoPath = ExtractRepoPathFromTitle(
+                        EmbeddedConsoleHost.GetWindowTitle(host.ConsoleHwnd));
+
+                    // Look up custom name from recent sessions by repo path
+                    string? customName = LookupRecentName(repoPath, recentSessions);
+
+                    var ps = new PersistedSession
+                    {
+                        Id = Guid.NewGuid(),
+                        RepoPath = repoPath,
+                        WorkingDirectory = repoPath,
+                        CustomName = customName,
+                        EmbeddedProcessId = proc.Id,
+                        ActivityState = ActivityState.Idle,
+                        CreatedAt = DateTimeOffset.UtcNow,
+                    };
+
+                    var session = _sessionManager.RestoreEmbeddedSession(ps);
+                    var vm = new SessionViewModel(session, Dispatcher);
+                    _sessions.Add(vm);
+
+                    _embeddedHosts[session.Id] = host;
+                    host.SetOwner(wpfHwnd);
+                    host.OnProcessExited += exitCode =>
+                    {
+                        session.NotifyEmbeddedProcessExited(exitCode);
+                    };
+
+                    reconnected++;
+                    FileLog.Write($"[Reconnect] Adopted PID {proc.Id} as session {session.Id}, repo=\"{repoPath}\", name=\"{customName ?? "(none)"}\"");
                 }
-                catch
+                catch (Exception ex)
                 {
-                    FileLog.Write($"[ScanProcesses]   PID={proc.Id,-6} {proc.ProcessName} (access denied)");
+                    FileLog.Write($"[Reconnect] Error adopting PID {proc.Id}: {ex.Message}");
                 }
                 finally
                 {
                     proc.Dispose();
                 }
             }
-            FileLog.Write($"[ScanProcesses] === End scan ===");
+
+            if (reconnected > 0)
+                PersistSessionState();
 
             MessageBox.Show(this,
-                $"Logged {processes.Length} processes to:\n{FileLog.CurrentLogPath}",
-                "Scan Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+                reconnected > 0
+                    ? $"Reconnected {reconnected} session(s)."
+                    : "Found orphaned processes but could not reconnect any.",
+                "Reconnect", MessageBoxButton.OK, MessageBoxImage.Information);
+
+            // Auto-select the first session if none is selected
+            if (reconnected > 0 && SessionList.SelectedItem == null && _sessions.Count > 0)
+            {
+                Dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Loaded,
+                    () => SessionList.SelectedItem = _sessions[0]);
+            }
         }
         catch (Exception ex)
         {
-            FileLog.Write($"[ScanProcesses] Error: {ex.Message}");
-            MessageBox.Show(this, $"Scan failed: {ex.Message}", "Error",
+            FileLog.Write($"[Reconnect] Error: {ex.Message}");
+            MessageBox.Show(this, $"Reconnect failed: {ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    /// <summary>
+    /// Extract a directory path from a console window title. Claude Code typically
+    /// shows the working directory in the title (e.g. "D:\ReposFred\cc_director").
+    /// Returns "Unknown" if no path can be extracted.
+    /// </summary>
+    private static string ExtractRepoPathFromTitle(string title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return "Unknown";
+
+        // Look for a Windows path pattern (drive letter:\...)
+        // The title may contain other text, so scan for path-like segments
+        var parts = title.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+        foreach (var part in parts)
+        {
+            if (part.Length >= 3 && char.IsLetter(part[0]) && part[1] == ':' && part[2] == '\\')
+            {
+                // Validate it looks like a real directory path
+                var candidate = part.TrimEnd('\\', '/', '>', ' ');
+                if (System.IO.Directory.Exists(candidate))
+                    return candidate;
+            }
+        }
+
+        // Fallback: if the entire title is a path
+        var trimmed = title.Trim().TrimEnd('\\', '/', '>', ' ');
+        if (trimmed.Length >= 3 && char.IsLetter(trimmed[0]) && trimmed[1] == ':' && trimmed[2] == '\\')
+        {
+            if (System.IO.Directory.Exists(trimmed))
+                return trimmed;
+        }
+
+        return "Unknown";
+    }
+
+    /// <summary>
+    /// Look up a custom session name from the recent sessions store by matching repo path.
+    /// Returns the most recently used name for this path, or null if no match.
+    /// </summary>
+    private static string? LookupRecentName(string repoPath, IReadOnlyList<RecentSession> recentSessions)
+    {
+        if (repoPath == "Unknown" || recentSessions.Count == 0)
+            return null;
+
+        var normalized = System.IO.Path.GetFullPath(repoPath).TrimEnd('\\', '/');
+        var match = recentSessions.FirstOrDefault(r =>
+            string.Equals(
+                System.IO.Path.GetFullPath(r.RepoPath).TrimEnd('\\', '/'),
+                normalized,
+                StringComparison.OrdinalIgnoreCase));
+
+        return match?.CustomName;
     }
 
     private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)
@@ -694,6 +833,7 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() == true)
         {
             vm.Rename(dialog.SessionName);
+            PersistSessionState();
         }
     }
 }
