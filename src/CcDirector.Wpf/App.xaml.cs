@@ -7,6 +7,7 @@ using CcDirector.Core.Pipes;
 using CcDirector.Core.Sessions;
 using CcDirector.Core.Utilities;
 using CcDirector.Wpf.Controls;
+using static CcDirector.Core.Utilities.FileLog;
 
 namespace CcDirector.Wpf;
 
@@ -62,7 +63,9 @@ public partial class App : Application
         RecentSessionStore = new RecentSessionStore();
         RecentSessionStore.Load();
 
-        Action<string> log = msg => System.Diagnostics.Debug.WriteLine($"[CcDirector] {msg}");
+        FileLog.Start();
+        Action<string> log = msg => FileLog.Write($"[CcDirector] {msg}");
+        log($"CC Director starting, log file: {FileLog.CurrentLogPath}");
 
         SessionManager = new SessionManager(Options, log);
         SessionManager.ScanForOrphans();
@@ -83,6 +86,8 @@ public partial class App : Application
 
         // Start NUL file watcher (monitors drive for stray NUL files)
         NulFileWatcher = new NulFileWatcher(log: log);
+        NulFileWatcher.OnNulFileDeleted = path => log($"Deleted NUL file: {path}");
+        NulFileWatcher.OnDeletionFailed = (path, ex) => log($"Failed to delete NUL file {path}: {ex.Message}");
         NulFileWatcher.Start();
     }
 
@@ -106,6 +111,9 @@ public partial class App : Application
 
         _singleInstanceMutex?.ReleaseMutex();
         _singleInstanceMutex?.Dispose();
+
+        FileLog.Write("[CcDirector] Exiting");
+        FileLog.Stop();
 
         base.OnExit(e);
     }
