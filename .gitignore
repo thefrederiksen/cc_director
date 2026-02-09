@@ -5,3 +5,12 @@ obj/
 .vs/
 release/
 nul
+tmp_build_output/appsettings.json
+tmp_build_output/cc_director.deps.json
+tmp_build_output/cc_director.dll
+tmp_build_output/cc_director.exe
+tmp_build_output/cc_director.pdb
+tmp_build_output/cc_director.runtimeconfig.json
+tmp_build_output/CcDirector.Core.deps.json
+tmp_build_output/CcDirector.Core.dll
+tmp_build_output/CcDirector.Core.pdb

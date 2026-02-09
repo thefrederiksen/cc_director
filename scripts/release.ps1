@@ -4,9 +4,9 @@
     Builds and packages CC Director for release.
 
 .DESCRIPTION
-    Publishes CC Director as a single-file executable and creates a zip archive
-    in the release/ directory. Framework-dependent by default (~5-10 MB, requires
-    .NET 10 runtime). Pass -SelfContained for a standalone build (~150+ MB).
+    Publishes CC Director as a single-file executable. Framework-dependent by
+    default (~5-10 MB, requires .NET 10 runtime). Pass -SelfContained for a
+    standalone build (~150+ MB).
 
 .PARAMETER SelfContained
     Build as self-contained (no .NET runtime required on target machine).
@@ -71,38 +71,15 @@ if (-not (Test-Path $exePath)) {
     exit 1
 }
 
-$exeSize = (Get-Item $exePath).Length / 1MB
-Write-Host "  Published exe: $([math]::Round($exeSize, 1)) MB" -ForegroundColor Green
-
-# Create release directory and zip
-$releaseDir = Join-Path $repoRoot "release"
-if (-not (Test-Path $releaseDir)) {
-    New-Item -ItemType Directory -Path $releaseDir | Out-Null
+# Copy to releases directory
+$releasesDir = Join-Path $repoRoot "releases"
+if (-not (Test-Path $releasesDir)) {
+    New-Item -ItemType Directory -Path $releasesDir | Out-Null
 }
+$destPath = Join-Path $releasesDir "cc_director.exe"
+Copy-Item $exePath $destPath -Force
 
-$suffix = if ($SelfContained) { "-selfcontained" } else { "" }
-$zipName = "CcDirector-v$version$suffix.zip"
-$zipPath = Join-Path $releaseDir $zipName
-
-# Stage files in a temp directory
-$stagingDir = Join-Path $releaseDir "staging"
-if (Test-Path $stagingDir) {
-    Remove-Item $stagingDir -Recurse -Force
-}
-New-Item -ItemType Directory -Path $stagingDir | Out-Null
-
-Copy-Item $exePath $stagingDir
-
-# Create zip
-if (Test-Path $zipPath) {
-    Remove-Item $zipPath -Force
-}
-Compress-Archive -Path (Join-Path $stagingDir "*") -DestinationPath $zipPath
-
-# Clean up staging
-Remove-Item $stagingDir -Recurse -Force
-
-$zipSize = (Get-Item $zipPath).Length / 1MB
+$exeSize = (Get-Item $destPath).Length / 1MB
 Write-Host ""
-Write-Host "Release package created:" -ForegroundColor Green
-Write-Host "  $zipPath ($([math]::Round($zipSize, 1)) MB)" -ForegroundColor Green
+Write-Host "Build complete: $([math]::Round($exeSize, 1)) MB" -ForegroundColor Green
+Write-Host "  $destPath" -ForegroundColor Green

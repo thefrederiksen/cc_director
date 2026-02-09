@@ -150,16 +150,45 @@ public partial class MainWindow : Window
     {
         var app = (App)Application.Current;
         var registry = app.RepositoryRegistry;
+        var recentStore = app.RecentSessionStore;
 
-        var dialog = new NewSessionDialog(registry);
+        var dialog = new NewSessionDialog(registry, recentStore);
         dialog.Owner = this;
         if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.SelectedPath))
         {
-            CreateSession(dialog.SelectedPath);
+            if (!string.IsNullOrWhiteSpace(dialog.SelectedCustomName))
+            {
+                // Check if session with same name is already open
+                var existing = _sessions.FirstOrDefault(s =>
+                    string.Equals(s.Session.CustomName, dialog.SelectedCustomName, StringComparison.Ordinal));
+
+                if (existing != null)
+                {
+                    // Switch to existing session, update recent timestamp
+                    SessionList.SelectedItem = existing;
+                    recentStore.Add(dialog.SelectedPath, dialog.SelectedCustomName);
+                    return;
+                }
+
+                // No duplicate — create new session with the recent name
+                var vm = CreateSession(dialog.SelectedPath);
+                if (vm == null) return;
+                vm.Rename(dialog.SelectedCustomName);
+                recentStore.Add(dialog.SelectedPath, dialog.SelectedCustomName);
+            }
+            else
+            {
+                // New repo selection — open rename dialog immediately
+                var vm = CreateSession(dialog.SelectedPath);
+                if (vm == null) return;
+                ShowRenameDialog(vm);
+                if (!string.IsNullOrWhiteSpace(vm.Session.CustomName))
+                    recentStore.Add(dialog.SelectedPath, vm.Session.CustomName);
+            }
         }
     }
 
-    private void CreateSession(string repoPath)
+    private SessionViewModel? CreateSession(string repoPath)
     {
         try
         {
@@ -167,11 +196,13 @@ public partial class MainWindow : Window
             var vm = new SessionViewModel(session, Dispatcher);
             _sessions.Add(vm);
             SessionList.SelectedItem = vm;
+            return vm;
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, $"Failed to create session:\n{ex.Message}",
                 "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            return null;
         }
     }
 
