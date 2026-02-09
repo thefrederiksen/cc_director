@@ -39,10 +39,9 @@ public class HookInstallerTests : IDisposable
         {
             "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
             "PostToolUseFailure", "PermissionRequest", "Notification",
-            "SubagentStart", "SubagentStop", "Stop", "TeammateIdle",
-            "TaskCompleted", "PreCompact", "SessionEnd"
+            "SubagentStart", "SubagentStop", "Stop", "PreCompact", "SessionEnd"
         };
-        Assert.Equal(14, expectedHooks.Length);
+        Assert.Equal(12, expectedHooks.Length);
         foreach (var name in expectedHooks)
             Assert.True(hooks.ContainsKey(name), $"Missing hook: {name}");
 
@@ -187,6 +186,113 @@ public class HookInstallerTests : IDisposable
         var stopArray = root["hooks"]!["Stop"]!.AsArray();
         Assert.Single(stopArray);
         Assert.Equal("my-custom-hook.sh", stopArray[0]!["hooks"]![0]!["command"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Install_RemovesStaleDirectorHooks()
+    {
+        // Simulate a settings.json with Director hooks under old/invalid event names
+        var staleSettings = new JsonObject
+        {
+            ["hooks"] = new JsonObject
+            {
+                ["TaskCompleted"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["hooks"] = new JsonArray
+                        {
+                            new JsonObject
+                            {
+                                ["type"] = "command",
+                                ["command"] = $"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{Path.Combine(_tempDir, "hook-relay.ps1")}\""
+                            }
+                        }
+                    }
+                },
+                ["TeammateIdle"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["hooks"] = new JsonArray
+                        {
+                            new JsonObject
+                            {
+                                ["type"] = "command",
+                                ["command"] = $"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{Path.Combine(_tempDir, "hook-relay.ps1")}\""
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        await File.WriteAllTextAsync(_settingsPath, staleSettings.ToJsonString());
+
+        await HookInstaller.InstallAsync(_relayScript, settingsPath: _settingsPath);
+
+        var json = await File.ReadAllTextAsync(_settingsPath);
+        var root = JsonNode.Parse(json)!;
+        var hooks = root["hooks"]!.AsObject();
+
+        // Stale keys should be gone
+        Assert.False(hooks.ContainsKey("TaskCompleted"), "TaskCompleted should have been removed");
+        Assert.False(hooks.ContainsKey("TeammateIdle"), "TeammateIdle should have been removed");
+
+        // Valid hooks should be present
+        Assert.True(hooks.ContainsKey("Stop"));
+        Assert.True(hooks.ContainsKey("SessionStart"));
+    }
+
+    [Fact]
+    public async Task Install_PreservesNonDirectorHooksOnStaleEvents()
+    {
+        // A stale event name that has BOTH a Director hook and a user hook
+        var mixedSettings = new JsonObject
+        {
+            ["hooks"] = new JsonObject
+            {
+                ["TaskCompleted"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["hooks"] = new JsonArray
+                        {
+                            new JsonObject
+                            {
+                                ["type"] = "command",
+                                ["command"] = "my-custom-task-hook.sh"
+                            }
+                        }
+                    },
+                    new JsonObject
+                    {
+                        ["hooks"] = new JsonArray
+                        {
+                            new JsonObject
+                            {
+                                ["type"] = "command",
+                                ["command"] = $"powershell.exe -File \"{Path.Combine(_tempDir, "hook-relay.ps1")}\""
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        await File.WriteAllTextAsync(_settingsPath, mixedSettings.ToJsonString());
+
+        await HookInstaller.InstallAsync(_relayScript, settingsPath: _settingsPath);
+
+        var json = await File.ReadAllTextAsync(_settingsPath);
+        var root = JsonNode.Parse(json)!;
+        var hooks = root["hooks"]!.AsObject();
+
+        // TaskCompleted should still exist because user has their own hook there
+        Assert.True(hooks.ContainsKey("TaskCompleted"));
+        var arr = hooks["TaskCompleted"]!.AsArray();
+        Assert.Single(arr); // only the user's hook remains
+        Assert.Equal("my-custom-task-hook.sh", arr[0]!["hooks"]![0]!["command"]!.GetValue<string>());
     }
 
     public void Dispose()

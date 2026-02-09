@@ -14,7 +14,7 @@
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
-            <ColumnDefinition Width="280" MinWidth="200" />
+            <ColumnDefinition x:Name="PipeMessagesColumn" Width="0" />
         </Grid.ColumnDefinitions>
 
             <!-- Left sidebar: sessions panel (full height) -->
@@ -57,24 +57,17 @@
                                     <Grid.ContextMenu>
                                         <ContextMenu>
                                             <MenuItem Header="Rename" Click="MenuRenameSession_Click" />
+                                            <MenuItem Header="Close Session" Click="MenuCloseSession_Click" />
                                         </ContextMenu>
                                     </Grid.ContextMenu>
                                     <Border BorderBrush="{Binding ActivityBrush}"
                                             BorderThickness="4,0,0,0"
                                             Padding="6,2,0,2">
-                                        <DockPanel>
-                                            <Button DockPanel.Dock="Right" Content="X"
-                                                    Click="BtnCloseSession_Click" Tag="{Binding}"
-                                                    Width="18" Height="18" FontSize="9" Padding="0"
-                                                    Background="Transparent" Foreground="#888888"
-                                                    BorderThickness="0" Cursor="Hand"
-                                                    VerticalAlignment="Center" Margin="4,0,2,0" />
-                                            <StackPanel Margin="4,2">
-                                                <TextBlock Text="{Binding DisplayName}" FontWeight="Medium"
-                                                           TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Text="{Binding StatusText}" FontSize="10" Opacity="0.7" />
-                                            </StackPanel>
-                                        </DockPanel>
+                                        <StackPanel Margin="4,2">
+                                            <TextBlock Text="{Binding DisplayName}" FontWeight="Medium"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding StatusText}" FontSize="10" Opacity="0.7" />
+                                        </StackPanel>
                                     </Border>
                                 </Grid>
                             </DataTemplate>
@@ -156,7 +149,8 @@
 
                 <!-- Prompt bar (center column only) -->
                 <Border Grid.Row="1" Background="{StaticResource SidebarBackground}"
-                        BorderBrush="#3C3C3C" BorderThickness="0,1,0,0" Padding="8">
+                        BorderBrush="#3C3C3C" BorderThickness="0,1,0,0" Padding="8"
+                        SizeChanged="PromptArea_SizeChanged">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -165,7 +159,8 @@
                         <TextBox x:Name="PromptInput"
                                  AcceptsReturn="True"
                                  TextWrapping="Wrap"
-                                 MinLines="4"
+                                 MinLines="3"
+                                 MinHeight="65"
                                  MaxHeight="160"
                                  VerticalScrollBarVisibility="Auto"
                                  Background="#1E1E1E"
@@ -201,14 +196,18 @@
                 </Border>
             </Grid>
 
-            <!-- Splitter (right) -->
-            <GridSplitter Grid.Column="3" Width="3"
-                          Background="{StaticResource PanelBackground}"
-                          HorizontalAlignment="Center"
-                          VerticalAlignment="Stretch" />
+            <!-- Toggle strip for pipe messages -->
+            <Border Grid.Column="3" Background="{StaticResource SidebarBackground}" Width="24">
+                <Button x:Name="PipeToggleButton" Content="&#x00AB;"
+                        Click="TogglePipeMessages_Click"
+                        Background="Transparent" Foreground="#888888"
+                        BorderThickness="0" Cursor="Hand"
+                        FontSize="14" VerticalAlignment="Center"
+                        ToolTip="Toggle pipe messages" />
+            </Border>
 
-            <!-- Right sidebar: pipe messages panel (full height) -->
-            <Border Grid.Column="4" Background="{StaticResource SidebarBackground}">
+            <!-- Right sidebar: pipe messages panel (full height, collapsed by default) -->
+            <Border x:Name="PipeMessagesPanel" Grid.Column="4" Background="{StaticResource SidebarBackground}" Visibility="Collapsed">
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="12,12,12,8">
                         <TextBlock Text="PIPE MESSAGES"

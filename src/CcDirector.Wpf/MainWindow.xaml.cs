@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<PipeMessageViewModel> _pipeMessages = new();
     private const int MaxPipeMessages = 500;
 
+    private bool _pipeMessagesExpanded;
     private SessionManager _sessionManager = null!;
     private TerminalControl? _terminalControl;
     private readonly Dictionary<Guid, EmbeddedConsoleHost> _embeddedHosts = new();
@@ -204,9 +205,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void BtnCloseSession_Click(object sender, RoutedEventArgs e)
+    private async void MenuCloseSession_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button btn || btn.Tag is not SessionViewModel vm)
+        if (sender is not MenuItem menuItem || menuItem.DataContext is not SessionViewModel vm)
+            return;
+
+        var result = MessageBox.Show(this,
+            $"Close session \"{vm.DisplayName}\"?\nThis will terminate the process and remove the session.",
+            "Close Session", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (result != MessageBoxResult.Yes)
             return;
 
         try
@@ -477,6 +484,29 @@ public partial class MainWindow : Window
     private void BtnClearPipeMessages_Click(object sender, RoutedEventArgs e)
     {
         _pipeMessages.Clear();
+    }
+
+    private void TogglePipeMessages_Click(object sender, RoutedEventArgs e)
+    {
+        _pipeMessagesExpanded = !_pipeMessagesExpanded;
+        if (_pipeMessagesExpanded)
+        {
+            PipeMessagesColumn.Width = new GridLength(280);
+            PipeMessagesPanel.Visibility = Visibility.Visible;
+            PipeToggleButton.Content = "\u00BB";
+        }
+        else
+        {
+            PipeMessagesColumn.Width = new GridLength(0);
+            PipeMessagesPanel.Visibility = Visibility.Collapsed;
+            PipeToggleButton.Content = "\u00AB";
+        }
+        DeferConsolePositionUpdate();
+    }
+
+    private void PromptArea_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        DeferConsolePositionUpdate();
     }
 
     private void SessionList_MouseDoubleClick(object sender, MouseButtonEventArgs e)

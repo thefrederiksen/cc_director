@@ -13,8 +13,7 @@ public static class HookInstaller
     {
         "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
         "PostToolUseFailure", "PermissionRequest", "Notification",
-        "SubagentStart", "SubagentStop", "Stop", "TeammateIdle",
-        "TaskCompleted", "PreCompact", "SessionEnd"
+        "SubagentStart", "SubagentStop", "Stop", "PreCompact", "SessionEnd"
     };
 
     /// <summary>
@@ -52,6 +51,38 @@ public static class HookInstaller
         }
 
         var command = $"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{relayScriptPath}\"";
+
+        // Clean up stale Director hooks for event names we no longer use
+        var validEvents = new HashSet<string>(HookEvents);
+        var staleKeys = new List<string>();
+        foreach (var prop in hooks.ToList())
+        {
+            if (validEvents.Contains(prop.Key)) continue;
+
+            var eventArray = prop.Value?.AsArray();
+            if (eventArray == null) continue;
+
+            for (int i = eventArray.Count - 1; i >= 0; i--)
+            {
+                var entryHooks = eventArray[i]?["hooks"]?.AsArray();
+                if (entryHooks == null) continue;
+                foreach (var hook in entryHooks)
+                {
+                    var cmd = hook?["command"]?.GetValue<string>();
+                    if (cmd != null && cmd.Contains("hook-relay.ps1", StringComparison.OrdinalIgnoreCase))
+                    {
+                        eventArray.RemoveAt(i);
+                        log?.Invoke($"Removed stale Director hook for '{prop.Key}'.");
+                        break;
+                    }
+                }
+            }
+
+            if (eventArray.Count == 0)
+                staleKeys.Add(prop.Key);
+        }
+        foreach (var key in staleKeys)
+            hooks.Remove(key);
 
         foreach (var eventName in HookEvents)
         {
