@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
+using CcDirector.Core.Utilities;
 
 namespace CcDirector.Wpf.Controls;
 
@@ -22,7 +23,7 @@ public class EmbeddedConsoleHost : IDisposable
         foreach (var instance in _allInstances.Keys)
         {
             try { instance.Dispose(); }
-            catch (Exception ex) { Debug.WriteLine($"[EmbeddedConsoleHost] DisposeAll error: {ex.Message}"); }
+            catch (Exception ex) { FileLog.Write($"[EmbeddedConsoleHost] DisposeAll error: {ex.Message}"); }
         }
     }
 
@@ -35,7 +36,7 @@ public class EmbeddedConsoleHost : IDisposable
         foreach (var instance in _allInstances.Keys)
         {
             try { instance.Detach(); }
-            catch (Exception ex) { Debug.WriteLine($"[EmbeddedConsoleHost] DetachAll error: {ex.Message}"); }
+            catch (Exception ex) { FileLog.Write($"[EmbeddedConsoleHost] DetachAll error: {ex.Message}"); }
         }
     }
 
@@ -73,7 +74,7 @@ public class EmbeddedConsoleHost : IDisposable
 
         if (hwnd == IntPtr.Zero)
         {
-            Debug.WriteLine($"[EmbeddedConsoleHost] Reattach: no valid HWND for PID {processId}");
+            FileLog.Write($"[EmbeddedConsoleHost] Reattach: no valid HWND for PID {processId}");
             process.Dispose();
             return null;
         }
@@ -94,7 +95,7 @@ public class EmbeddedConsoleHost : IDisposable
         StripBorders(hwnd);
         _allInstances.TryAdd(host, 0);
 
-        Debug.WriteLine($"[EmbeddedConsoleHost] Reattached to PID {processId}, hwnd=0x{hwnd:X}");
+        FileLog.Write($"[EmbeddedConsoleHost] Reattached to PID {processId}, hwnd=0x{hwnd:X}");
         return host;
     }
 
@@ -114,6 +115,8 @@ public class EmbeddedConsoleHost : IDisposable
     /// </summary>
     public void StartProcess(string exe, string args, string workingDir)
     {
+        LogDefaultTerminalSetting();
+
         var psi = new ProcessStartInfo
         {
             FileName = exe,
@@ -133,17 +136,30 @@ public class EmbeddedConsoleHost : IDisposable
         _process.Start();
         _allInstances.TryAdd(this, 0);
 
-        Debug.WriteLine($"[EmbeddedConsoleHost] Process started, PID={_process.Id}");
+        FileLog.Write($"[EmbeddedConsoleHost] Process started: \"{exe}\" {args}");
+        FileLog.Write($"[EmbeddedConsoleHost]   PID={_process.Id}, WorkingDir={workingDir}");
+        LogProcessTree(_process.Id);
 
         _consoleHwnd = WaitForConsoleWindow(_process, TimeSpan.FromSeconds(5));
 
         if (_consoleHwnd == IntPtr.Zero)
         {
-            Debug.WriteLine("[EmbeddedConsoleHost] Could not find console window handle");
+            FileLog.Write("[EmbeddedConsoleHost] Could not find console window handle after 5s");
+            // Log MainWindowHandle as alternative diagnostic
+            try
+            {
+                _process.Refresh();
+                FileLog.Write($"[EmbeddedConsoleHost]   Process.MainWindowHandle=0x{_process.MainWindowHandle:X}");
+                FileLog.Write($"[EmbeddedConsoleHost]   Process.MainWindowTitle=\"{_process.MainWindowTitle}\"");
+            }
+            catch (Exception ex)
+            {
+                FileLog.Write($"[EmbeddedConsoleHost]   MainWindowHandle check failed: {ex.Message}");
+            }
             return;
         }
 
-        Debug.WriteLine($"[EmbeddedConsoleHost] Found console hwnd=0x{_consoleHwnd:X}");
+        LogWindowInfo(_consoleHwnd, "Found console window");
         StripBorders(_consoleHwnd);
         _visible = true;
     }
@@ -204,17 +220,17 @@ public class EmbeddedConsoleHost : IDisposable
     {
         if (_process == null || _process.HasExited)
         {
-            Debug.WriteLine("[EmbeddedConsoleHost] SendTextAsync: process not running");
+            FileLog.Write("[EmbeddedConsoleHost] SendTextAsync: process not running");
             return;
         }
 
         if (await SendTextViaWriteConsoleInput(text))
         {
-            Debug.WriteLine("[EmbeddedConsoleHost] Tier 1 (Unicode WriteConsoleInput) succeeded");
+            FileLog.Write("[EmbeddedConsoleHost] Tier 1 (Unicode WriteConsoleInput) succeeded");
             return;
         }
 
-        Debug.WriteLine("[EmbeddedConsoleHost] Tier 1 failed, falling back to Tier 2 (clipboard paste)");
+        FileLog.Write("[EmbeddedConsoleHost] Tier 1 failed, falling back to Tier 2 (clipboard paste)");
         await SendTextViaClipboardPaste(text);
     }
 
@@ -230,7 +246,7 @@ public class EmbeddedConsoleHost : IDisposable
         FreeConsole();
         if (!AttachConsole((uint)_process!.Id))
         {
-            Debug.WriteLine($"[EmbeddedConsoleHost] Tier1: AttachConsole failed, error={Marshal.GetLastWin32Error()}");
+            FileLog.Write($"[EmbeddedConsoleHost] Tier1: AttachConsole failed, error={Marshal.GetLastWin32Error()}");
             return false;
         }
 
@@ -239,7 +255,7 @@ public class EmbeddedConsoleHost : IDisposable
             IntPtr hInput = GetStdHandle(STD_INPUT_HANDLE);
             if (hInput == IntPtr.Zero || hInput == INVALID_HANDLE_VALUE)
             {
-                Debug.WriteLine("[EmbeddedConsoleHost] Tier1: GetStdHandle failed");
+                FileLog.Write("[EmbeddedConsoleHost] Tier1: GetStdHandle failed");
                 return false;
             }
 
@@ -254,10 +270,10 @@ public class EmbeddedConsoleHost : IDisposable
             var textArr = textRecords.ToArray();
             if (!WriteConsoleInput(hInput, textArr, (uint)textArr.Length, out uint textWritten))
             {
-                Debug.WriteLine($"[EmbeddedConsoleHost] Tier1: WriteConsoleInput (text) failed, error={Marshal.GetLastWin32Error()}");
+                FileLog.Write($"[EmbeddedConsoleHost] Tier1: WriteConsoleInput (text) failed, error={Marshal.GetLastWin32Error()}");
                 return false;
             }
-            Debug.WriteLine($"[EmbeddedConsoleHost] Tier1: wrote {textWritten}/{textArr.Length} text records");
+            FileLog.Write($"[EmbeddedConsoleHost] Tier1: wrote {textWritten}/{textArr.Length} text records");
 
             // Detach before awaiting so we don't hold the console across the delay
             FreeConsole();
@@ -268,14 +284,14 @@ public class EmbeddedConsoleHost : IDisposable
             // Re-attach for the Enter key
             if (!AttachConsole((uint)_process!.Id))
             {
-                Debug.WriteLine($"[EmbeddedConsoleHost] Tier1: re-AttachConsole failed, error={Marshal.GetLastWin32Error()}");
+                FileLog.Write($"[EmbeddedConsoleHost] Tier1: re-AttachConsole failed, error={Marshal.GetLastWin32Error()}");
                 return false;
             }
 
             hInput = GetStdHandle(STD_INPUT_HANDLE);
             if (hInput == IntPtr.Zero || hInput == INVALID_HANDLE_VALUE)
             {
-                Debug.WriteLine("[EmbeddedConsoleHost] Tier1: GetStdHandle (Enter) failed");
+                FileLog.Write("[EmbeddedConsoleHost] Tier1: GetStdHandle (Enter) failed");
                 return false;
             }
 
@@ -288,10 +304,10 @@ public class EmbeddedConsoleHost : IDisposable
 
             if (!WriteConsoleInput(hInput, enterRecords, (uint)enterRecords.Length, out uint enterWritten))
             {
-                Debug.WriteLine($"[EmbeddedConsoleHost] Tier1: WriteConsoleInput (Enter) failed, error={Marshal.GetLastWin32Error()}");
+                FileLog.Write($"[EmbeddedConsoleHost] Tier1: WriteConsoleInput (Enter) failed, error={Marshal.GetLastWin32Error()}");
                 return false;
             }
-            Debug.WriteLine($"[EmbeddedConsoleHost] Tier1: wrote {enterWritten}/{enterRecords.Length} Enter records");
+            FileLog.Write($"[EmbeddedConsoleHost] Tier1: wrote {enterWritten}/{enterRecords.Length} Enter records");
 
             return textWritten == (uint)textArr.Length && enterWritten == (uint)enterRecords.Length;
         }
@@ -352,7 +368,7 @@ public class EmbeddedConsoleHost : IDisposable
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[EmbeddedConsoleHost] Tier2: clipboard restore failed: {ex.Message}");
+                FileLog.Write($"[EmbeddedConsoleHost] Tier2: clipboard restore failed: {ex.Message}");
             }
         }
     }
@@ -372,7 +388,7 @@ public class EmbeddedConsoleHost : IDisposable
         };
 
         uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<SENDINPUT>());
-        Debug.WriteLine($"[EmbeddedConsoleHost] SimulateCtrlV: sent {sent}/{inputs.Length} inputs");
+        FileLog.Write($"[EmbeddedConsoleHost] SimulateCtrlV: sent {sent}/{inputs.Length} inputs");
     }
 
     private static SENDINPUT MakeKeyboardInput(ushort vk, uint flags)
@@ -433,7 +449,7 @@ public class EmbeddedConsoleHost : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[EmbeddedConsoleHost] Kill error: {ex.Message}");
+            FileLog.Write($"[EmbeddedConsoleHost] Kill error: {ex.Message}");
         }
 
         _process?.Dispose();
@@ -492,10 +508,17 @@ public class EmbeddedConsoleHost : IDisposable
     private static IntPtr WaitForConsoleWindow(Process process, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
+        int attempt = 0;
+        int lastError = 0;
+
         while (DateTime.UtcNow < deadline)
         {
+            attempt++;
             if (process.HasExited)
+            {
+                FileLog.Write($"[EmbeddedConsoleHost] WaitForConsoleWindow: process exited on attempt {attempt}");
                 return IntPtr.Zero;
+            }
 
             FreeConsole();
 
@@ -505,15 +528,30 @@ public class EmbeddedConsoleHost : IDisposable
                 FreeConsole();
                 if (hwnd != IntPtr.Zero)
                 {
-                    Debug.WriteLine($"[EmbeddedConsoleHost] AttachConsole succeeded, hwnd=0x{hwnd:X}");
+                    FileLog.Write($"[EmbeddedConsoleHost] AttachConsole succeeded on attempt {attempt}, hwnd=0x{hwnd:X}");
+                    LogWindowInfo(hwnd, "Console window discovered");
                     return hwnd;
+                }
+                else
+                {
+                    if (attempt <= 3 || attempt % 10 == 0)
+                        FileLog.Write($"[EmbeddedConsoleHost] WaitForConsoleWindow attempt {attempt}: AttachConsole OK but GetConsoleWindow returned NULL");
+                }
+            }
+            else
+            {
+                int err = Marshal.GetLastWin32Error();
+                if (err != lastError || attempt <= 3)
+                {
+                    FileLog.Write($"[EmbeddedConsoleHost] WaitForConsoleWindow attempt {attempt}: AttachConsole failed, error={err}");
+                    lastError = err;
                 }
             }
 
             Thread.Sleep(100);
         }
 
-        Debug.WriteLine("[EmbeddedConsoleHost] Timed out waiting for console window");
+        FileLog.Write($"[EmbeddedConsoleHost] Timed out after {attempt} attempts waiting for console window (PID {process.Id})");
         return IntPtr.Zero;
     }
 
@@ -549,6 +587,102 @@ public class EmbeddedConsoleHost : IDisposable
                 dwControlKeyState = 0,
             }
         };
+    }
+
+    // --- Diagnostic helpers ---
+
+    /// <summary>Log the default terminal setting from the registry.</summary>
+    private static void LogDefaultTerminalSetting()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Console\%%Startup");
+            if (key == null)
+            {
+                FileLog.Write("[EmbeddedConsoleHost] Registry Console\\%%Startup key not found (legacy conhost is default)");
+                return;
+            }
+            var delegationConsole = key.GetValue("DelegationConsole")?.ToString() ?? "(not set)";
+            var delegationTerminal = key.GetValue("DelegationTerminal")?.ToString() ?? "(not set)";
+            FileLog.Write($"[EmbeddedConsoleHost] Default terminal: DelegationConsole={delegationConsole}, DelegationTerminal={delegationTerminal}");
+
+            // Known GUIDs
+            const string conhostGuid = "{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}";
+            const string wtTerminalGuid = "{E12CFF52-A866-4C77-9A90-F570A7AA2C6B}";
+            if (delegationTerminal.Contains(wtTerminalGuid, StringComparison.OrdinalIgnoreCase))
+                FileLog.Write("[EmbeddedConsoleHost]   -> Windows Terminal IS the default terminal (will intercept console creation)");
+            else if (delegationTerminal.Contains(conhostGuid, StringComparison.OrdinalIgnoreCase))
+                FileLog.Write("[EmbeddedConsoleHost]   -> Legacy conhost is the default terminal");
+            else
+                FileLog.Write("[EmbeddedConsoleHost]   -> Unknown default terminal GUID");
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[EmbeddedConsoleHost] Failed to read default terminal setting: {ex.Message}");
+        }
+    }
+
+    /// <summary>Log window class, rect, and styles for diagnostic purposes.</summary>
+    private static void LogWindowInfo(IntPtr hwnd, string label)
+    {
+        try
+        {
+            var className = new System.Text.StringBuilder(256);
+            GetClassName(hwnd, className, className.Capacity);
+
+            GetWindowRect(hwnd, out RECT rect);
+            int style = GetWindowLong(hwnd, GWL_STYLE);
+            int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+
+            GetWindowThreadProcessId(hwnd, out uint ownerPid);
+
+            FileLog.Write($"[EmbeddedConsoleHost] {label}:");
+            FileLog.Write($"[EmbeddedConsoleHost]   HWND=0x{hwnd:X}, Class=\"{className}\", OwnerPID={ownerPid}");
+            FileLog.Write($"[EmbeddedConsoleHost]   Rect=({rect.Left},{rect.Top})-({rect.Right},{rect.Bottom}) [{rect.Right - rect.Left}x{rect.Bottom - rect.Top}]");
+            FileLog.Write($"[EmbeddedConsoleHost]   Style=0x{style:X8}, ExStyle=0x{exStyle:X8}");
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[EmbeddedConsoleHost] LogWindowInfo failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Log the process tree for a given PID (parent chain + direct children).</summary>
+    private static void LogProcessTree(int pid)
+    {
+        try
+        {
+            var target = Process.GetProcessById(pid);
+            FileLog.Write($"[EmbeddedConsoleHost] Process tree for PID {pid}:");
+            FileLog.Write($"[EmbeddedConsoleHost]   Name={target.ProcessName}, MainWindowHandle=0x{target.MainWindowHandle:X}");
+            target.Dispose();
+
+            // Find child processes
+            var allProcs = Process.GetProcesses();
+            int childCount = 0;
+            foreach (var proc in allProcs)
+            {
+                try
+                {
+                    // Use WMI-free approach: check if parent PID matches via NtQueryInformationProcess
+                    // For simplicity, just log claude/node/conhost processes
+                    var name = proc.ProcessName.ToLowerInvariant();
+                    if (name is "claude" or "node" or "conhost" or "openconsole" or "windowsterminal" or "cmd" or "powershell" or "pwsh")
+                    {
+                        FileLog.Write($"[EmbeddedConsoleHost]   Related process: PID={proc.Id} Name={proc.ProcessName} MainWindowHandle=0x{proc.MainWindowHandle:X}");
+                        childCount++;
+                    }
+                }
+                catch { /* access denied, skip */ }
+                finally { proc.Dispose(); }
+            }
+            if (childCount == 0)
+                FileLog.Write("[EmbeddedConsoleHost]   No related console/terminal processes found");
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[EmbeddedConsoleHost] LogProcessTree failed: {ex.Message}");
+        }
     }
 
     // --- Win32 constants ---
@@ -632,6 +766,15 @@ public class EmbeddedConsoleHost : IDisposable
     [DllImport("user32.dll")]
     private static extern bool IsWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
     [DllImport("user32.dll")]
     private static extern short VkKeyScan(char ch);
 
@@ -679,6 +822,12 @@ public class EmbeddedConsoleHost : IDisposable
     private struct InputUnion
     {
         [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left, Top, Right, Bottom;
     }
 
     [StructLayout(LayoutKind.Sequential)]

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -8,6 +9,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using CcDirector.Core.Pipes;
 using CcDirector.Core.Sessions;
+using CcDirector.Core.Utilities;
 using CcDirector.Wpf.Controls;
 
 namespace CcDirector.Wpf;
@@ -512,6 +514,56 @@ public partial class MainWindow : Window
         });
     }
 
+    private void BtnScanProcesses_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var processes = Process.GetProcesses()
+                .OrderBy(p => p.ProcessName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            FileLog.Write($"[ScanProcesses] === Process scan: {processes.Length} processes ===");
+            foreach (var proc in processes)
+            {
+                try
+                {
+                    string title = string.IsNullOrEmpty(proc.MainWindowTitle) ? "" : $" Title=\"{proc.MainWindowTitle}\"";
+                    string hwnd = proc.MainWindowHandle != IntPtr.Zero ? $" HWND=0x{proc.MainWindowHandle:X}" : "";
+                    FileLog.Write($"[ScanProcesses]   PID={proc.Id,-6} {proc.ProcessName}{title}{hwnd}");
+                }
+                catch
+                {
+                    FileLog.Write($"[ScanProcesses]   PID={proc.Id,-6} {proc.ProcessName} (access denied)");
+                }
+                finally
+                {
+                    proc.Dispose();
+                }
+            }
+            FileLog.Write($"[ScanProcesses] === End scan ===");
+
+            MessageBox.Show(this,
+                $"Logged {processes.Length} processes to:\n{FileLog.CurrentLogPath}",
+                "Scan Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[ScanProcesses] Error: {ex.Message}");
+            MessageBox.Show(this, $"Scan failed: {ex.Message}", "Error",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)
+    {
+        var logDir = System.IO.Path.GetDirectoryName(FileLog.CurrentLogPath);
+        if (logDir != null && System.IO.Directory.Exists(logDir))
+            Process.Start("explorer.exe", logDir);
+        else
+            MessageBox.Show(this, $"Log directory not found:\n{logDir}", "Logs",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
     private void BtnClearPipeMessages_Click(object sender, RoutedEventArgs e)
     {
         _pipeMessages.Clear();
@@ -552,6 +604,31 @@ public partial class MainWindow : Window
             menuItem.DataContext is SessionViewModel vm)
         {
             ShowRenameDialog(vm);
+        }
+    }
+
+    private void MenuOpenInExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem menuItem &&
+            menuItem.DataContext is SessionViewModel vm &&
+            !string.IsNullOrEmpty(vm.Session.RepoPath) &&
+            System.IO.Directory.Exists(vm.Session.RepoPath))
+        {
+            Process.Start("explorer.exe", vm.Session.RepoPath);
+        }
+    }
+
+    private void MenuOpenInVsCode_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem menuItem &&
+            menuItem.DataContext is SessionViewModel vm &&
+            !string.IsNullOrEmpty(vm.Session.RepoPath) &&
+            System.IO.Directory.Exists(vm.Session.RepoPath))
+        {
+            Process.Start(new ProcessStartInfo("code", vm.Session.RepoPath)
+            {
+                UseShellExecute = true,
+            });
         }
     }
 

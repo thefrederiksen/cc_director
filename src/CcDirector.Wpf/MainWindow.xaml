@@ -42,6 +42,22 @@
                                 Foreground="{StaticResource TextForeground}"
                                 BorderThickness="0"
                                 Cursor="Hand" />
+                        <Button x:Name="BtnScanProcesses" Content="Scan Processes"
+                                Click="BtnScanProcesses_Click"
+                                Height="30" Margin="0,2"
+                                Background="{StaticResource ButtonBackground}"
+                                Foreground="{StaticResource TextForeground}"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                ToolTip="Log all running processes to file log" />
+                        <Button x:Name="BtnOpenLogs" Content="Open Logs"
+                                Click="BtnOpenLogs_Click"
+                                Height="30" Margin="0,2"
+                                Background="{StaticResource ButtonBackground}"
+                                Foreground="{StaticResource TextForeground}"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                ToolTip="Open log directory in Explorer" />
                     </StackPanel>
 
                     <ListBox x:Name="SessionList"
@@ -57,6 +73,10 @@
                                     <Grid.ContextMenu>
                                         <ContextMenu>
                                             <MenuItem Header="Rename" Click="MenuRenameSession_Click" />
+                                            <Separator />
+                                            <MenuItem Header="Open in Explorer" Click="MenuOpenInExplorer_Click" />
+                                            <MenuItem Header="Open in VS Code" Click="MenuOpenInVsCode_Click" />
+                                            <Separator />
                                             <MenuItem Header="Close Session" Click="MenuCloseSession_Click" />
                                         </ContextMenu>
                                     </Grid.ContextMenu>
