@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -36,6 +37,7 @@ public partial class MainWindow : Window
         SizeChanged += (_, _) => DeferConsolePositionUpdate();
         StateChanged += MainWindow_StateChanged;
         Activated += MainWindow_Activated;
+        Deactivated += MainWindow_Deactivated;
         SessionTabs.SelectionChanged += SessionTabs_SelectionChanged;
     }
 
@@ -80,7 +82,7 @@ public partial class MainWindow : Window
         if (activeSessions.Count > 0)
         {
             var dialog = new CloseDialog(activeSessions.Count) { Owner = this };
-            if (ShowDialogOverConsole(dialog) != true)
+            if (dialog.ShowDialog() != true)
             {
                 e.Cancel = true;
                 return;
@@ -184,7 +186,7 @@ public partial class MainWindow : Window
 
         var dialog = new NewSessionDialog(registry, recentStore);
         dialog.Owner = this;
-        if (ShowDialogOverConsole(dialog) == true && !string.IsNullOrWhiteSpace(dialog.SelectedPath))
+        if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.SelectedPath))
         {
             if (!string.IsNullOrWhiteSpace(dialog.SelectedCustomName))
             {
@@ -445,6 +447,20 @@ public partial class MainWindow : Window
         DeferConsolePositionUpdate();
     }
 
+    private void MainWindow_Deactivated(object? sender, EventArgs e)
+    {
+        if (_activeEmbeddedHost == null) return;
+
+        // Don't hide when focus moves to our own embedded console
+        var foreground = GetForegroundWindow();
+        if (foreground == _activeEmbeddedHost.ConsoleHwnd) return;
+
+        _activeEmbeddedHost.Hide();
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
     private void DeferConsolePositionUpdate()
     {
         Dispatcher.BeginInvoke(
@@ -467,30 +483,6 @@ public partial class MainWindow : Window
         {
             _activeEmbeddedHost.Show();
             DeferConsolePositionUpdate();
-        }
-    }
-
-    /// <summary>
-    /// Show a modal dialog while temporarily hiding the console overlay
-    /// so it doesn't render on top of the dialog.
-    /// </summary>
-    private bool? ShowDialogOverConsole(Window dialog)
-    {
-        _activeEmbeddedHost?.Hide();
-        try
-        {
-            return dialog.ShowDialog();
-        }
-        finally
-        {
-            if (_activeEmbeddedHost != null &&
-                _activeEmbeddedHost.IsVisible == false &&
-                WindowState != WindowState.Minimized &&
-                SessionTabs.SelectedIndex == 0)
-            {
-                _activeEmbeddedHost.Show();
-                DeferConsolePositionUpdate();
-            }
         }
     }
 
@@ -699,7 +691,7 @@ public partial class MainWindow : Window
     private void ShowRenameDialog(SessionViewModel vm)
     {
         var dialog = new RenameSessionDialog(vm.DisplayName) { Owner = this };
-        if (ShowDialogOverConsole(dialog) == true)
+        if (dialog.ShowDialog() == true)
         {
             vm.Rename(dialog.SessionName);
         }
