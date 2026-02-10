@@ -136,24 +136,34 @@ public class TerminalControl : FrameworkElement
 
         if (_parser == null) return;
 
-        // Determine which rows to render based on scroll offset
-        int scrollbackStart = _scrollback.Count - _scrollOffset;
+        // Scrolling model:
+        // - Virtual buffer = scrollback lines + current screen (_rows)
+        // - _scrollOffset = 0 means show current screen (bottom)
+        // - _scrollOffset > 0 means scrolled up into history
+        int totalLines = _scrollback.Count + _rows;
+        int viewportStart = Math.Max(0, totalLines - _rows - _scrollOffset);
 
         for (int row = 0; row < _rows; row++)
         {
-            int sourceRow = row - (_rows - Math.Min(_rows, _scrollback.Count)) + scrollbackStart;
+            int virtualRow = viewportStart + row;
 
             for (int col = 0; col < _cols; col++)
             {
                 TerminalCell cell;
-                if (_scrollOffset > 0 && sourceRow >= 0 && sourceRow < _scrollback.Count)
+                if (virtualRow < _scrollback.Count)
                 {
-                    var line = _scrollback[sourceRow];
+                    // Row is from scrollback history
+                    var line = _scrollback[virtualRow];
                     cell = col < line.Length ? line[col] : default;
                 }
                 else
                 {
-                    cell = _cells[col, row];
+                    // Row is from current screen
+                    int screenRow = virtualRow - _scrollback.Count;
+                    if (screenRow >= 0 && screenRow < _rows)
+                        cell = _cells[col, screenRow];
+                    else
+                        cell = default;
                 }
 
                 // Draw background if not default

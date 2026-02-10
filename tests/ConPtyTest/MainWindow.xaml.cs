@@ -1,22 +1,24 @@
 using System.ComponentModel;
 using System.Text;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
-using ConPtyTest.ConPty;
-using ConPtyTest.Controls;
-using ConPtyTest.Memory;
+using System.Windows.Media;
 
 namespace ConPtyTest;
 
 public partial class MainWindow : Window
 {
-    private PseudoConsole? _console;
-    private ProcessHost? _processHost;
-    private CircularTerminalBuffer? _buffer;
-    private TerminalControl? _terminal;
+    private const int SessionCount = 3;
+    private readonly ClaudeSession[] _sessions = new ClaudeSession[SessionCount];
+    private int _activeSession = 0;
 
     // Hardcoded working directory
     private const string WorkingDir = @"D:\ReposFred\cc_director";
+
+    // UI elements for each session
+    private Border[] _sessionBorders = null!;
+    private TextBlock[] _sessionStatusTexts = null!;
 
     public MainWindow()
     {
@@ -27,87 +29,183 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        _buffer = new CircularTerminalBuffer();
-        _terminal = new TerminalControl();
+        // Cache UI element arrays
+        _sessionBorders = new[] { Session1Border, Session2Border, Session3Border };
+        _sessionStatusTexts = new[] { Session1Status, Session2Status, Session3Status };
 
-        // Wire up terminal events
-        _terminal.InputReceived += OnTerminalInput;
-        _terminal.TerminalSizeChanged += OnTerminalSizeChanged;
+        // Create all sessions
+        for (int i = 0; i < SessionCount; i++)
+        {
+            _sessions[i] = new ClaudeSession(i + 1);
+            _sessions[i].CreateTerminal();
+            _sessions[i].StatusChanged += OnSessionStatusChanged;
+            _sessions[i].ProcessExited += OnSessionExited;
 
-        TerminalContainer.Child = _terminal;
+            // Add terminal to grid
+            if (_sessions[i].Terminal != null)
+            {
+                TerminalGrid.Children.Add(_sessions[i].Terminal);
+            }
+        }
 
-        // Attach terminal to buffer
-        _terminal.Attach(_buffer);
+        // Show first terminal
+        if (_sessions[0].Terminal != null)
+        {
+            _sessions[0].Terminal!.Visibility = Visibility.Visible;
+        }
 
-        // Get initial dimensions
-        var (cols, rows) = _terminal.GetDimensions();
+        // Wire up terminal events for active session input/resize handling
+        for (int i = 0; i < SessionCount; i++)
+        {
+            int sessionIndex = i; // Capture for closure
+            _sessions[i].WireTerminalEvents(
+                data => OnTerminalInput(sessionIndex, data),
+                (cols, rows) => OnTerminalSizeChanged(sessionIndex, cols, rows)
+            );
+        }
+
+        // Get initial dimensions from first terminal
+        var (cols, rows) = _sessions[0].GetDimensions();
         DimensionsText.Text = $"{cols}x{rows}";
 
-        StartConPtySession((short)cols, (short)rows);
+        // Start all sessions
+        for (int i = 0; i < SessionCount; i++)
+        {
+            try
+            {
+                _sessions[i].Start((short)cols, (short)rows, WorkingDir);
+            }
+            catch (Exception ex)
+            {
+                _sessionStatusTexts[i].Text = "Error";
+                MessageBox.Show($"Failed to start session {i + 1}:\n\n{ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        // Update UI
+        UpdateActiveSessionUI();
+        UpdateProcessIdDisplay();
 
         // Auto-focus the input box
         InputBox.Focus();
     }
 
-    private void StartConPtySession(short cols, short rows)
+    private void SwitchSession(int index)
     {
-        try
+        if (index == _activeSession || index < 0 || index >= SessionCount)
+            return;
+
+        // Hide current terminal
+        if (_sessions[_activeSession].Terminal != null)
         {
-            StatusText.Text = "Starting...";
-
-            // Create ConPTY with terminal dimensions
-            _console = PseudoConsole.Create(cols, rows);
-
-            // Create process host
-            _processHost = new ProcessHost(_console);
-            _processHost.OnExited += OnProcessExited;
-
-            // Start claude in the hardcoded directory
-            _processHost.Start("claude", "", WorkingDir);
-
-            // Start the drain loop to read output into buffer
-            _processHost.StartDrainLoop(_buffer!);
-
-            // Start monitoring for process exit
-            _processHost.StartExitMonitor();
-
-            ProcessIdText.Text = _processHost.ProcessId.ToString();
-            StatusText.Text = "Running";
+            _sessions[_activeSession].Terminal!.Visibility = Visibility.Collapsed;
         }
-        catch (Exception ex)
+
+        // Show new terminal
+        _activeSession = index;
+        if (_sessions[_activeSession].Terminal != null)
         {
-            StatusText.Text = "Error";
-            MessageBox.Show($"Failed to start ConPTY session:\n\n{ex.Message}", "Error",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            _sessions[_activeSession].Terminal!.Visibility = Visibility.Visible;
         }
-    }
 
-    private void OnTerminalInput(byte[] data)
-    {
-        _processHost?.Write(data);
-    }
+        // Update UI
+        UpdateActiveSessionUI();
+        UpdateProcessIdDisplay();
 
-    private void OnTerminalSizeChanged(short cols, short rows)
-    {
+        // Update dimensions display for active session
+        var (cols, rows) = _sessions[_activeSession].GetDimensions();
         DimensionsText.Text = $"{cols}x{rows}";
-        try
-        {
-            _console?.Resize(cols, rows);
-        }
-        catch
-        {
-            // Resize may fail if console is disposed
-        }
     }
 
-    private void OnProcessExited(int exitCode)
+    private void UpdateActiveSessionUI()
+    {
+        for (int i = 0; i < SessionCount; i++)
+        {
+            if (i == _activeSession)
+            {
+                _sessionBorders[i].Background = new SolidColorBrush(Color.FromRgb(60, 60, 60));
+            }
+            else
+            {
+                _sessionBorders[i].Background = new SolidColorBrush(Color.FromRgb(45, 45, 45));
+            }
+        }
+
+        ActiveSessionText.Text = $"Session {_activeSession + 1}";
+    }
+
+    private void UpdateProcessIdDisplay()
+    {
+        var pid = _sessions[_activeSession].ProcessId;
+        ProcessIdText.Text = pid > 0 ? pid.ToString() : "-";
+    }
+
+    private void OnSessionStatusChanged(ClaudeSession session, string status)
     {
         Dispatcher.Invoke(() =>
         {
-            StatusText.Text = $"Exited ({exitCode})";
-            StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(255, 100, 100));
+            int index = session.SessionId - 1;
+            if (index >= 0 && index < SessionCount)
+            {
+                _sessionStatusTexts[index].Text = status;
+
+                // Update process ID if this is the active session
+                if (index == _activeSession)
+                {
+                    UpdateProcessIdDisplay();
+                }
+            }
         });
+    }
+
+    private void OnSessionExited(ClaudeSession session, int exitCode)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            int index = session.SessionId - 1;
+            if (index >= 0 && index < SessionCount)
+            {
+                _sessionStatusTexts[index].Foreground = new SolidColorBrush(
+                    Color.FromRgb(255, 100, 100));
+            }
+        });
+    }
+
+    private void OnTerminalInput(int sessionIndex, byte[] data)
+    {
+        // Only process input for active session
+        if (sessionIndex == _activeSession)
+        {
+            _sessions[sessionIndex].Write(data);
+        }
+    }
+
+    private void OnTerminalSizeChanged(int sessionIndex, short cols, short rows)
+    {
+        // Update dimensions display if this is the active session
+        if (sessionIndex == _activeSession)
+        {
+            DimensionsText.Text = $"{cols}x{rows}";
+        }
+
+        // Resize the console for this session
+        _sessions[sessionIndex].Resize(cols, rows);
+    }
+
+    private void Session1_Click(object sender, MouseButtonEventArgs e)
+    {
+        SwitchSession(0);
+    }
+
+    private void Session2_Click(object sender, MouseButtonEventArgs e)
+    {
+        SwitchSession(1);
+    }
+
+    private void Session3_Click(object sender, MouseButtonEventArgs e)
+    {
+        SwitchSession(2);
     }
 
     private async void SendInput()
@@ -119,15 +217,15 @@ public partial class MainWindow : Window
         // Clear the input box
         InputBox.Clear();
 
-        // Send the text (will appear as paste)
+        // Send the text to active session
         var bytes = Encoding.UTF8.GetBytes(text);
-        _processHost?.Write(bytes);
+        _sessions[_activeSession].Write(bytes);
 
         // Wait for Claude to process the paste
         await Task.Delay(100);
 
         // Now send Enter
-        _processHost?.Write(new byte[] { 0x0D });
+        _sessions[_activeSession].Write(new byte[] { 0x0D });
     }
 
     private void SendButton_Click(object sender, RoutedEventArgs e)
@@ -147,24 +245,25 @@ public partial class MainWindow : Window
 
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
-        _terminal?.Detach();
-
-        if (_processHost != null)
+        // Shutdown all sessions
+        var shutdownTasks = new List<Task>();
+        foreach (var session in _sessions)
         {
-            try
+            if (session != null)
             {
-                await _processHost.GracefulShutdownAsync(2000);
-            }
-            catch
-            {
-                // Ignore shutdown errors
-            }
-            finally
-            {
-                _processHost.Dispose();
+                shutdownTasks.Add(session.GracefulShutdownAsync(2000));
             }
         }
 
-        _buffer?.Dispose();
+        if (shutdownTasks.Count > 0)
+        {
+            await Task.WhenAll(shutdownTasks);
+        }
+
+        // Dispose all sessions
+        foreach (var session in _sessions)
+        {
+            session?.Dispose();
+        }
     }
 }
