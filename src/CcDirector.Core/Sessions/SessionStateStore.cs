@@ -35,7 +35,7 @@ public class SessionStateStore
     {
         FilePath = filePath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            "CcDirector",
+            "CcDirector_v2",
             "sessions.json");
     }
 

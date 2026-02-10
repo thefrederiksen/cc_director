@@ -60,18 +60,20 @@ public class NulFileWatcherTests : IDisposable
         var nulPath = Path.Combine(subDir, "NUL");
         var extendedPath = @"\\?\" + nulPath;
         File.WriteAllText(extendedPath, "test");
+        Assert.True(File.Exists(extendedPath), "NUL file should exist after creation");
 
-        string? deletedPath = null;
         var tcs = new TaskCompletionSource<string>();
 
         using var watcher = new NulFileWatcher(_tempDir, msg => System.Diagnostics.Debug.WriteLine($"[Test] {msg}"));
         watcher.OnNulFileDeleted = path => tcs.TrySetResult(path);
         watcher.Start();
 
+        // Note: If cc_director is running, its NulFileWatcher may delete this file
+        // before this test's watcher can, causing a timeout.
         var completed = await Task.WhenAny(tcs.Task, Task.Delay(10_000));
-        Assert.True(completed == tcs.Task, "Timed out waiting for NUL file deletion");
+        Assert.True(completed == tcs.Task, "Timed out waiting for NUL file deletion (is cc_director running?)");
 
-        deletedPath = await tcs.Task;
+        var deletedPath = await tcs.Task;
         Assert.Contains("NUL", deletedPath);
         Assert.False(File.Exists(extendedPath), "NUL file should have been deleted by scan");
     }
@@ -121,6 +123,52 @@ public class NulFileWatcherTests : IDisposable
 
         // Should not throw — double-dispose should be safe too
         watcher.Dispose();
+    }
+
+    /// <summary>
+    /// Integration test: attempts to delete a real nul file at a known location.
+    /// This test will be skipped if no nul file exists at the target path.
+    /// </summary>
+    [Fact]
+    public void TryDeleteNulFile_RealFile_Integration()
+    {
+        // Known locations where nul files commonly appear
+        var knownPaths = new[]
+        {
+            @"D:\ReposFred\cc_director\nul",
+            @"D:\ReposFred\cc_computer\nul",
+            @"C:\ReposFred\cc_director\nul",
+        };
+
+        string? foundPath = null;
+        foreach (var path in knownPaths)
+        {
+            var extendedPath = NulFileWatcher.ToExtendedLengthPath(path);
+            if (File.Exists(extendedPath))
+            {
+                foundPath = path;
+                break;
+            }
+        }
+
+        if (foundPath == null)
+        {
+            // No nul file found - skip this test
+            System.Diagnostics.Debug.WriteLine("[Test] No nul file found at known locations - skipping");
+            return;
+        }
+
+        System.Diagnostics.Debug.WriteLine($"[Test] Found nul file at: {foundPath}");
+
+        // Attempt deletion
+        var result = NulFileWatcher.TryDeleteNulFile(foundPath);
+
+        Assert.True(result, $"TryDeleteNulFile should return true for {foundPath}");
+
+        var extendedAfter = NulFileWatcher.ToExtendedLengthPath(foundPath);
+        Assert.False(File.Exists(extendedAfter), $"NUL file should be deleted at {foundPath}");
+
+        System.Diagnostics.Debug.WriteLine($"[Test] Successfully deleted nul file: {foundPath}");
     }
 
     public void Dispose()

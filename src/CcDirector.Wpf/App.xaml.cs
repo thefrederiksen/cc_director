@@ -41,15 +41,15 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // Single-instance enforcement
-        _singleInstanceMutex = new Mutex(true, @"Global\CcDirector_SingleInstance", out bool createdNew);
-        if (!createdNew)
-        {
-            MessageBox.Show("CC Director is already running.", "CC Director",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            Shutdown();
-            return;
-        }
+        // Single-instance enforcement (disabled for testing)
+        // _singleInstanceMutex = new Mutex(true, @"Global\CcDirector_SingleInstance", out bool createdNew);
+        // if (!createdNew)
+        // {
+        //     MessageBox.Show("CC Director is already running.", "CC Director",
+        //         MessageBoxButton.OK, MessageBoxImage.Information);
+        //     Shutdown();
+        //     return;
+        // }
 
         LoadConfiguration();
 
@@ -70,10 +70,9 @@ public partial class App : Application
         SessionManager = new SessionManager(Options, log);
         SessionManager.ScanForOrphans();
 
-        // Restore persisted sessions (before pipe server starts, so EventRouter can find them)
-        // LoadPersistedSessions validates PIDs and re-saves only live sessions.
-        var restored = SessionManager.LoadPersistedSessions(SessionStateStore);
-        RestoredPersistedData = restored.Select(r => r.Persisted).ToList();
+        // Load persisted session data (validates PIDs and re-saves only live sessions).
+        // Actual session restoration happens in MainWindow.RestorePersistedSessions.
+        RestoredPersistedData = SessionManager.LoadPersistedSessions(SessionStateStore);
 
         // Start pipe server and event router
         PipeServer = new DirectorPipeServer(log);

@@ -1,16 +1,16 @@
 namespace CcDirector.Core.Utilities;
 
 /// <summary>
-/// Monitors a drive for files named "NUL" and deletes them.
+/// Monitors local drives for files named "NUL" and deletes them.
 /// Windows reserves the NUL device name, but actual files can be created via \\?\ prefix paths.
 /// These files are hard to delete normally and clutter the filesystem.
 /// </summary>
 public sealed class NulFileWatcher : IDisposable
 {
-    private readonly string _drivePath;
+    private readonly List<string> _drivePaths;
     private readonly Action<string>? _log;
     private readonly CancellationTokenSource _cts = new();
-    private FileSystemWatcher? _watcher;
+    private readonly List<FileSystemWatcher> _watchers = new();
     private Task? _scanTask;
     private bool _disposed;
 
@@ -20,24 +20,64 @@ public sealed class NulFileWatcher : IDisposable
     /// <summary>Raised when deletion of a NUL file fails.</summary>
     public Action<string, Exception>? OnDeletionFailed;
 
-    public NulFileWatcher(string? drivePath = null, Action<string>? log = null)
+    /// <summary>
+    /// Creates a NulFileWatcher that monitors the specified drives, or all local fixed drives if none specified.
+    /// </summary>
+    /// <param name="drivePaths">Specific drive paths to monitor (e.g., "C:\", "D:\"). If null or empty, monitors all local fixed drives.</param>
+    /// <param name="log">Optional logging callback.</param>
+    public NulFileWatcher(IEnumerable<string>? drivePaths = null, Action<string>? log = null)
     {
-        _drivePath = drivePath ?? Path.GetPathRoot(AppContext.BaseDirectory)!;
+        _drivePaths = drivePaths?.ToList() ?? GetAllLocalDrives();
         _log = log;
+    }
+
+    /// <summary>
+    /// Creates a NulFileWatcher that monitors a single drive.
+    /// </summary>
+    /// <param name="drivePath">Single drive path to monitor. If null, monitors all local fixed drives.</param>
+    /// <param name="log">Optional logging callback.</param>
+    public NulFileWatcher(string? drivePath, Action<string>? log)
+        : this(drivePath != null ? new[] { drivePath } : null, log)
+    {
+    }
+
+    /// <summary>
+    /// Gets all local fixed drives (e.g., C:\, D:\).
+    /// </summary>
+    private static List<string> GetAllLocalDrives()
+    {
+        return DriveInfo.GetDrives()
+            .Where(d => d.DriveType == DriveType.Fixed && d.IsReady)
+            .Select(d => d.RootDirectory.FullName)
+            .ToList();
     }
 
     public void Start()
     {
-        _watcher = new FileSystemWatcher(_drivePath)
-        {
-            Filter = "NUL",
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.FileName,
-            EnableRaisingEvents = true
-        };
-        _watcher.Created += OnFileCreated;
+        _log?.Invoke($"Starting NUL file watcher for drives: {string.Join(", ", _drivePaths)}");
 
-        _scanTask = ScanDriveAsync(_cts.Token);
+        foreach (var drivePath in _drivePaths)
+        {
+            try
+            {
+                var watcher = new FileSystemWatcher(drivePath)
+                {
+                    Filter = "NUL",
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.FileName,
+                    EnableRaisingEvents = true
+                };
+                watcher.Created += OnFileCreated;
+                _watchers.Add(watcher);
+                _log?.Invoke($"Watching drive: {drivePath}");
+            }
+            catch (Exception ex)
+            {
+                _log?.Invoke($"Failed to create watcher for {drivePath}: {ex.Message}");
+            }
+        }
+
+        _scanTask = ScanAllDrivesAsync(_cts.Token);
     }
 
     private void OnFileCreated(object sender, FileSystemEventArgs e)
@@ -46,9 +86,31 @@ public sealed class NulFileWatcher : IDisposable
         TryDeleteAndRaiseEvents(e.FullPath);
     }
 
+    internal Task ScanAllDrivesAsync(CancellationToken ct)
+    {
+        return Task.Run(() =>
+        {
+            foreach (var drivePath in _drivePaths)
+            {
+                if (ct.IsCancellationRequested) return;
+                _log?.Invoke($"Scanning drive for NUL files: {drivePath}");
+                ScanDirectory(drivePath, ct);
+            }
+            _log?.Invoke("Initial NUL file scan complete.");
+        }, ct);
+    }
+
+    // Keep this for backward compatibility with tests
     internal Task ScanDriveAsync(CancellationToken ct)
     {
-        return Task.Run(() => ScanDirectory(_drivePath, ct), ct);
+        return Task.Run(() =>
+        {
+            foreach (var drivePath in _drivePaths)
+            {
+                if (ct.IsCancellationRequested) return;
+                ScanDirectory(drivePath, ct);
+            }
+        }, ct);
     }
 
     private void ScanDirectory(string directory, CancellationToken ct)
@@ -61,15 +123,18 @@ public sealed class NulFileWatcher : IDisposable
 
         try
         {
+            // Check for NUL file in this directory
             var nulPath = Path.Combine(directory, "NUL");
             var extendedPath = ToExtendedLengthPath(nulPath);
+
             if (File.Exists(extendedPath))
             {
                 _log?.Invoke($"NUL file found by scan: {nulPath}");
                 TryDeleteAndRaiseEvents(nulPath);
             }
 
-            foreach (var subDir in Directory.EnumerateDirectories(directory))
+            // Recursively scan subdirectories
+            foreach (var subDir in Directory.GetDirectories(directory))
             {
                 if (ct.IsCancellationRequested) return;
                 ScanDirectory(subDir, ct);
@@ -119,7 +184,7 @@ public sealed class NulFileWatcher : IDisposable
     /// <summary>
     /// Adds the \\?\ extended-length path prefix if not already present.
     /// This is required to interact with files named NUL, CON, PRN, etc.
-    /// on Windows — without it, the OS interprets these as device names.
+    /// on Windows - without it, the OS interprets these as device names.
     /// </summary>
     internal static string ToExtendedLengthPath(string path)
     {
@@ -136,12 +201,12 @@ public sealed class NulFileWatcher : IDisposable
 
         _cts.Cancel();
 
-        if (_watcher != null)
+        foreach (var watcher in _watchers)
         {
-            _watcher.EnableRaisingEvents = false;
-            _watcher.Dispose();
-            _watcher = null;
+            watcher.EnableRaisingEvents = false;
+            watcher.Dispose();
         }
+        _watchers.Clear();
 
         _cts.Dispose();
     }

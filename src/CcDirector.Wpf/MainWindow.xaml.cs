@@ -9,11 +9,13 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using CcDirector.Core.Backends;
 using CcDirector.Core.Configuration;
 using CcDirector.Core.Git;
 using CcDirector.Core.Pipes;
 using CcDirector.Core.Sessions;
 using CcDirector.Core.Utilities;
+using CcDirector.Wpf.Backends;
 using CcDirector.Wpf.Controls;
 
 namespace CcDirector.Wpf;
@@ -27,8 +29,7 @@ public partial class MainWindow : Window
     private bool _pipeMessagesExpanded;
     private SessionManager _sessionManager = null!;
     private TerminalControl? _terminalControl;
-    private readonly Dictionary<Guid, EmbeddedConsoleHost> _embeddedHosts = new();
-    private EmbeddedConsoleHost? _activeEmbeddedHost;
+    private EmbeddedBackend? _activeEmbeddedBackend;
     private Session? _activeSession;
     private CancellationTokenSource? _enterRetryCts;
     private SessionViewModel? _headerBoundVm;
@@ -71,13 +72,13 @@ public partial class MainWindow : Window
         // the window is being activated (wParam != 0).
         if (msg == WM_NCACTIVATE && wParam != IntPtr.Zero)
         {
-            if (_activeEmbeddedHost != null &&
-                _activeEmbeddedHost.IsVisible &&
+            if (_activeEmbeddedBackend != null &&
+                _activeEmbeddedBackend.IsRunning &&
                 WindowState != WindowState.Minimized)
             {
                 Dispatcher.BeginInvoke(
                     System.Windows.Threading.DispatcherPriority.Input,
-                    () => _activeEmbeddedHost?.EnsureZOrder());
+                    () => _activeEmbeddedBackend?.EnsureZOrder());
             }
         }
 
@@ -107,15 +108,18 @@ public partial class MainWindow : Window
                 // Keep sessions alive — save state, detach consoles
                 app.SessionManager.SaveSessionState(app.SessionStateStore, sessionId =>
                 {
-                    if (_embeddedHosts.TryGetValue(sessionId, out var host))
-                        return host.ConsoleHwnd.ToInt64();
+                    var session = app.SessionManager.GetSession(sessionId);
+                    if (session?.Backend is EmbeddedBackend eb)
+                        return eb.ConsoleHwnd.ToInt64();
                     return 0;
                 });
 
                 DetachTerminal();
-                foreach (var host in _embeddedHosts.Values)
-                    host.Detach();
-                _embeddedHosts.Clear();
+                foreach (var vm in _sessions)
+                {
+                    if (vm.Session.Backend is EmbeddedBackend eb)
+                        eb.Detach();
+                }
 
                 app.KeepSessionsOnExit = true;
                 base.OnClosing(e);
@@ -126,9 +130,7 @@ public partial class MainWindow : Window
         }
 
         DetachTerminal();
-        foreach (var host in _embeddedHosts.Values)
-            host.Dispose();
-        _embeddedHosts.Clear();
+        // Sessions and their backends are disposed by SessionManager
 
         base.OnClosing(e);
     }
@@ -141,55 +143,7 @@ public partial class MainWindow : Window
         if (app.EventRouter != null)
             app.EventRouter.OnRawMessage += OnPipeMessageReceived;
 
-        // Restore persisted sessions (loaded by App.OnStartup into SessionManager)
-        RestorePersistedSessions();
-    }
-
-    private void RestorePersistedSessions()
-    {
-        var app = (App)Application.Current;
-        var persistedData = app.RestoredPersistedData;
-        app.RestoredPersistedData = null; // consume once
-
-        var restoredSessions = _sessionManager.ListSessions()
-            .Where(s => s.Mode == SessionMode.Embedded && s.Status == SessionStatus.Running)
-            .ToList();
-
-        if (restoredSessions.Count == 0) return;
-
-        // Build HWND lookup from persisted data
-        var hwndMap = persistedData?.ToDictionary(p => p.Id, p => new IntPtr(p.ConsoleHwnd))
-            ?? new Dictionary<Guid, IntPtr>();
-
-        var wpfHwnd = new WindowInteropHelper(this).Handle;
-
-        foreach (var session in restoredSessions)
-        {
-            var vm = new SessionViewModel(session, Dispatcher);
-            _sessions.Add(vm);
-
-            // Reattach the embedded console host using persisted HWND
-            hwndMap.TryGetValue(session.Id, out var persistedHwnd);
-            var host = EmbeddedConsoleHost.Reattach(session.EmbeddedProcessId, persistedHwnd);
-            if (host != null)
-            {
-                _embeddedHosts[session.Id] = host;
-                host.SetOwner(wpfHwnd);
-                host.OnProcessExited += exitCode =>
-                {
-                    session.NotifyEmbeddedProcessExited(exitCode);
-                };
-            }
-        }
-
-        // Auto-select the first session after layout completes so the
-        // console overlay positions correctly over the rendered TerminalArea.
-        if (_sessions.Count > 0)
-        {
-            Dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Loaded,
-                () => SessionList.SelectedItem = _sessions[0]);
-        }
+        // v2 uses ConPTY only - no session restoration from embedded mode
     }
 
     private void BtnNewSession_Click(object sender, RoutedEventArgs e)
@@ -241,10 +195,12 @@ public partial class MainWindow : Window
     {
         try
         {
-            var session = _sessionManager.CreateEmbeddedSession(repoPath);
+            // Create session with ConPty backend (default mode)
+            var session = _sessionManager.CreateSession(repoPath, null, SessionBackendType.ConPty);
             var vm = new SessionViewModel(session, Dispatcher);
             _sessions.Add(vm);
             SessionList.SelectedItem = vm;
+            PersistSessionState();
             return vm;
         }
         catch (Exception ex)
@@ -262,12 +218,10 @@ public partial class MainWindow : Window
 
         try
         {
-            // Dispose and remove the embedded host for this session
-            if (_embeddedHosts.Remove(vm.Session.Id, out var host))
+            // Clear active backend reference if this is the active session
+            if (_activeSession?.Id == vm.Session.Id)
             {
-                if (_activeEmbeddedHost == host)
-                    _activeEmbeddedHost = null;
-                host.Dispose();
+                _activeEmbeddedBackend = null;
             }
 
             await _sessionManager.KillSessionAsync(vm.Session.Id);
@@ -299,12 +253,10 @@ public partial class MainWindow : Window
 
         try
         {
-            // Dispose and remove the embedded host for this session
-            if (_embeddedHosts.Remove(vm.Session.Id, out var host))
+            // Clear active backend reference if this is the active session
+            if (_activeSession?.Id == vm.Session.Id)
             {
-                if (_activeEmbeddedHost == host)
-                    _activeEmbeddedHost = null;
-                host.Dispose();
+                _activeEmbeddedBackend = null;
             }
 
             // Kill if still running
@@ -348,9 +300,9 @@ public partial class MainWindow : Window
         PlaceholderText.Visibility = Visibility.Collapsed;
         SessionTabs.Visibility = Visibility.Visible;
 
-        // Hide previous embedded host (don't kill it)
-        _activeEmbeddedHost?.Hide();
-        _activeEmbeddedHost = null;
+        // Hide previous embedded backend (don't kill it)
+        _activeEmbeddedBackend?.Hide();
+        _activeEmbeddedBackend = null;
 
         // Clean up previous terminal control
         if (_terminalControl != null)
@@ -360,54 +312,13 @@ public partial class MainWindow : Window
         }
         TerminalArea.Child = null;
 
-        if (session.Mode == SessionMode.Embedded)
+        if (session.BackendType == SessionBackendType.Embedded)
         {
-            if (_embeddedHosts.TryGetValue(session.Id, out var existingHost))
+            // Get the embedded backend from the session
+            if (session.Backend is EmbeddedBackend embeddedBackend)
             {
-                // Reuse existing host — just show it
-                _activeEmbeddedHost = existingHost;
-                existingHost.Show();
-                DeferConsolePositionUpdate();
-            }
-            else
-            {
-                // Check if Windows Terminal is the default - warn user before proceeding
-                if (EmbeddedConsoleHost.IsWindowsTerminalDefault())
-                {
-                    var warningDialog = new WindowsTerminalWarningDialog { Owner = this };
-                    if (warningDialog.ShowDialog() != true)
-                    {
-                        // User declined or opened settings - don't start session
-                        var sessionMgr = ((App)Application.Current).SessionManager;
-                        sessionMgr.RemoveSession(session.Id);
-                        SessionList.SelectedItem = null;
-                        PlaceholderText.Visibility = Visibility.Visible;
-                        SessionTabs.Visibility = Visibility.Collapsed;
-                        return;
-                    }
-                }
-
-                // Create new host
-                var app = (App)Application.Current;
-                var host = new EmbeddedConsoleHost();
-                _activeEmbeddedHost = host;
-                _embeddedHosts[session.Id] = host;
-
-                string args = session.ClaudeArgs ?? string.Empty;
-                host.StartProcess(app.SessionManager.Options.ClaudePath, args, session.WorkingDirectory);
-                session.SetEmbeddedProcessId(host.ProcessId);
-                PersistSessionState();
-
-                // Set WPF window as owner so console stays above it in Z-order
-                var wpfHwnd = new WindowInteropHelper(this).Handle;
-                host.SetOwner(wpfHwnd);
-
-                host.OnProcessExited += exitCode =>
-                {
-                    session.NotifyEmbeddedProcessExited(exitCode);
-                };
-
-                // Position console overlay after layout
+                _activeEmbeddedBackend = embeddedBackend;
+                embeddedBackend.Show();
                 DeferConsolePositionUpdate();
             }
         }
@@ -436,8 +347,8 @@ public partial class MainWindow : Window
             _terminalControl.Detach();
             _terminalControl = null;
         }
-        _activeEmbeddedHost?.Hide();
-        _activeEmbeddedHost = null;
+        _activeEmbeddedBackend?.Hide();
+        _activeEmbeddedBackend = null;
         TerminalArea.Child = null;
 
         // Hide session header banner
@@ -539,7 +450,7 @@ public partial class MainWindow : Window
 
     private void UpdateConsolePosition()
     {
-        if (_activeEmbeddedHost == null || _activeEmbeddedHost.ConsoleHwnd == IntPtr.Zero)
+        if (_activeEmbeddedBackend == null || _activeEmbeddedBackend.ConsoleHwnd == IntPtr.Zero)
             return;
 
         // TerminalArea is a Border — get its screen-space rect
@@ -550,20 +461,20 @@ public partial class MainWindow : Window
         var bottomRight = TerminalArea.PointToScreen(new Point(TerminalArea.ActualWidth, TerminalArea.ActualHeight));
 
         var screenRect = new Rect(topLeft, bottomRight);
-        _activeEmbeddedHost.UpdatePosition(screenRect);
+        _activeEmbeddedBackend.UpdatePosition(screenRect);
     }
 
     private void MainWindow_StateChanged(object? sender, EventArgs e)
     {
-        if (_activeEmbeddedHost == null) return;
+        if (_activeEmbeddedBackend == null) return;
 
         if (WindowState == WindowState.Minimized)
         {
-            _activeEmbeddedHost.Hide();
+            _activeEmbeddedBackend.Hide();
         }
         else
         {
-            _activeEmbeddedHost.Show();
+            _activeEmbeddedBackend.Show();
             // Reposition after restore
             DeferConsolePositionUpdate();
         }
@@ -571,22 +482,22 @@ public partial class MainWindow : Window
 
     private void MainWindow_Activated(object? sender, EventArgs e)
     {
-        if (_activeEmbeddedHost == null) return;
+        if (_activeEmbeddedBackend == null) return;
 
         // Bring console overlay back to top when WPF window regains focus
-        _activeEmbeddedHost.Show();
+        _activeEmbeddedBackend.Show();
         DeferConsolePositionUpdate();
     }
 
     private void MainWindow_Deactivated(object? sender, EventArgs e)
     {
-        if (_activeEmbeddedHost == null) return;
+        if (_activeEmbeddedBackend == null) return;
 
         // Don't hide when focus moves to our own embedded console
         var foreground = GetForegroundWindow();
-        if (foreground == _activeEmbeddedHost.ConsoleHwnd) return;
+        if (foreground == _activeEmbeddedBackend.ConsoleHwnd) return;
 
-        _activeEmbeddedHost.Hide();
+        _activeEmbeddedBackend.Hide();
     }
 
     [DllImport("user32.dll")]
@@ -605,14 +516,14 @@ public partial class MainWindow : Window
         // Re-assert z-order after a brief delay so the popup settles first.
         Dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Input,
-            () => _activeEmbeddedHost?.EnsureZOrder());
+            () => _activeEmbeddedBackend?.EnsureZOrder());
     }
 
     private void SessionContextMenu_Closed(object sender, RoutedEventArgs e)
     {
-        if (_activeEmbeddedHost != null && _activeEmbeddedHost.IsVisible)
+        if (_activeEmbeddedBackend != null && _activeEmbeddedBackend.IsVisible)
         {
-            _activeEmbeddedHost.Show();
+            _activeEmbeddedBackend.Show();
             DeferConsolePositionUpdate();
         }
     }
@@ -631,25 +542,25 @@ public partial class MainWindow : Window
             _repoChangeTimer.Stop();
         }
 
-        if (_activeEmbeddedHost == null) return;
+        if (_activeEmbeddedBackend == null) return;
 
         // Terminal tab is index 0 — show overlay only when it's selected
         if (SessionTabs.SelectedIndex == 0)
         {
-            _activeEmbeddedHost.Show();
+            _activeEmbeddedBackend.Show();
             DeferConsolePositionUpdate();
         }
         else
         {
-            _activeEmbeddedHost.Hide();
+            _activeEmbeddedBackend.Hide();
         }
     }
 
     private void BtnRefreshConsole_Click(object sender, RoutedEventArgs e)
     {
-        if (_activeEmbeddedHost != null)
+        if (_activeEmbeddedBackend != null)
         {
-            _activeEmbeddedHost.Show();
+            _activeEmbeddedBackend.Show();
             UpdateConsolePosition();
         }
     }
@@ -659,9 +570,9 @@ public partial class MainWindow : Window
         // Re-show console overlay when text box gets focus — covers the case
         // where the user clicked the console window then clicked back here,
         // which can cause the console to slip behind the WPF window.
-        if (_activeEmbeddedHost != null)
+        if (_activeEmbeddedBackend != null)
         {
-            _activeEmbeddedHost.Show();
+            _activeEmbeddedBackend.Show();
             DeferConsolePositionUpdate();
         }
     }
@@ -689,11 +600,11 @@ public partial class MainWindow : Window
         var text = PromptInput.Text.ReplaceLineEndings(" ").Trim();
         PromptInput.Clear();
 
-        if (_activeSession.Mode == SessionMode.Embedded && _activeEmbeddedHost != null)
+        if (_activeSession.BackendType == SessionBackendType.Embedded && _activeEmbeddedBackend != null)
         {
             // Send keystrokes directly to the embedded console window
-            await _activeEmbeddedHost.SendTextAsync(text);
-            ScheduleEnterRetry(_activeSession, _activeEmbeddedHost);
+            await _activeEmbeddedBackend.SendTextAsync(text);
+            ScheduleEnterRetry(_activeSession, _activeEmbeddedBackend);
         }
         else
         {
@@ -703,7 +614,7 @@ public partial class MainWindow : Window
         PromptInput.Focus();
     }
 
-    private void ScheduleEnterRetry(Session session, EmbeddedConsoleHost host)
+    private void ScheduleEnterRetry(Session session, EmbeddedBackend backend)
     {
         _enterRetryCts?.Cancel();
         _enterRetryCts = new CancellationTokenSource();
@@ -719,22 +630,22 @@ public partial class MainWindow : Window
         }
 
         session.OnActivityStateChanged += OnStateChanged;
-        _ = RetryEnterAfterDelay(session, host, cts, OnStateChanged);
+        _ = RetryEnterAfterDelay(session, backend, cts, OnStateChanged);
     }
 
     private async Task RetryEnterAfterDelay(
         Session session,
-        EmbeddedConsoleHost host,
+        EmbeddedBackend backend,
         CancellationTokenSource cts,
         Action<ActivityState, ActivityState> handler)
     {
         try
         {
             await Task.Delay(3000, cts.Token);
-            await host.SendEnterAsync();
+            await backend.SendEnterAsync();
             FileLog.Write("[MainWindow] Enter retry: sent extra Enter (no UserPromptSubmit within 3s)");
         }
-        catch (TaskCanceledException) { /* UserPromptSubmit arrived — no retry needed */ }
+        catch (TaskCanceledException) { /* UserPromptSubmit arrived - no retry needed */ }
         finally
         {
             session.OnActivityStateChanged -= handler;
@@ -769,167 +680,6 @@ public partial class MainWindow : Window
             if (_pipeMessages.Count > 0)
                 PipeMessageList.ScrollIntoView(_pipeMessages[^1]);
         });
-    }
-
-    private void BtnReconnect_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            var trackedPids = _sessionManager.GetTrackedProcessIds();
-            var claudeProcesses = Process.GetProcessesByName("claude");
-            var orphans = new List<Process>();
-
-            foreach (var proc in claudeProcesses)
-            {
-                if (proc.HasExited || trackedPids.Contains(proc.Id))
-                {
-                    proc.Dispose();
-                    continue;
-                }
-                orphans.Add(proc);
-            }
-
-            if (orphans.Count == 0)
-            {
-                MessageBox.Show(this, "No orphaned claude.exe sessions found.",
-                    "Reconnect", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-
-            var wpfHwnd = new WindowInteropHelper(this).Handle;
-            var app = (App)Application.Current;
-            var recentSessions = app.RecentSessionStore.GetRecent();
-            int reconnected = 0;
-
-            foreach (var proc in orphans)
-            {
-                try
-                {
-                    var host = EmbeddedConsoleHost.Reattach(proc.Id, IntPtr.Zero);
-                    if (host == null)
-                    {
-                        FileLog.Write($"[Reconnect] Could not reattach to PID {proc.Id}, skipping.");
-                        continue;
-                    }
-
-                    // Try to extract repo path from the console window title
-                    string repoPath = ExtractRepoPathFromTitle(
-                        EmbeddedConsoleHost.GetWindowTitle(host.ConsoleHwnd));
-
-                    // Look up custom name and color from recent sessions by repo path
-                    var recentMatch = LookupRecentSession(repoPath, recentSessions);
-
-                    var ps = new PersistedSession
-                    {
-                        Id = Guid.NewGuid(),
-                        RepoPath = repoPath,
-                        WorkingDirectory = repoPath,
-                        CustomName = recentMatch?.CustomName,
-                        CustomColor = recentMatch?.CustomColor,
-                        EmbeddedProcessId = proc.Id,
-                        ActivityState = ActivityState.Idle,
-                        CreatedAt = DateTimeOffset.UtcNow,
-                    };
-
-                    var session = _sessionManager.RestoreEmbeddedSession(ps);
-                    var vm = new SessionViewModel(session, Dispatcher);
-                    _sessions.Add(vm);
-
-                    _embeddedHosts[session.Id] = host;
-                    host.SetOwner(wpfHwnd);
-                    host.OnProcessExited += exitCode =>
-                    {
-                        session.NotifyEmbeddedProcessExited(exitCode);
-                    };
-
-                    reconnected++;
-                    FileLog.Write($"[Reconnect] Adopted PID {proc.Id} as session {session.Id}, repo=\"{repoPath}\", name=\"{recentMatch?.CustomName ?? "(none)"}\"");
-                }
-                catch (Exception ex)
-                {
-                    FileLog.Write($"[Reconnect] Error adopting PID {proc.Id}: {ex.Message}");
-                }
-                finally
-                {
-                    proc.Dispose();
-                }
-            }
-
-            if (reconnected > 0)
-                PersistSessionState();
-
-            MessageBox.Show(this,
-                reconnected > 0
-                    ? $"Reconnected {reconnected} session(s)."
-                    : "Found orphaned processes but could not reconnect any.",
-                "Reconnect", MessageBoxButton.OK, MessageBoxImage.Information);
-
-            // Auto-select the first session if none is selected
-            if (reconnected > 0 && SessionList.SelectedItem == null && _sessions.Count > 0)
-            {
-                Dispatcher.BeginInvoke(
-                    System.Windows.Threading.DispatcherPriority.Loaded,
-                    () => SessionList.SelectedItem = _sessions[0]);
-            }
-        }
-        catch (Exception ex)
-        {
-            FileLog.Write($"[Reconnect] Error: {ex.Message}");
-            MessageBox.Show(this, $"Reconnect failed: {ex.Message}", "Error",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    /// <summary>
-    /// Extract a directory path from a console window title. Claude Code typically
-    /// shows the working directory in the title (e.g. "D:\ReposFred\cc_director").
-    /// Returns "Unknown" if no path can be extracted.
-    /// </summary>
-    private static string ExtractRepoPathFromTitle(string title)
-    {
-        if (string.IsNullOrWhiteSpace(title))
-            return "Unknown";
-
-        // Look for a Windows path pattern (drive letter:\...)
-        // The title may contain other text, so scan for path-like segments
-        var parts = title.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
-        foreach (var part in parts)
-        {
-            if (part.Length >= 3 && char.IsLetter(part[0]) && part[1] == ':' && part[2] == '\\')
-            {
-                // Validate it looks like a real directory path
-                var candidate = part.TrimEnd('\\', '/', '>', ' ');
-                if (System.IO.Directory.Exists(candidate))
-                    return candidate;
-            }
-        }
-
-        // Fallback: if the entire title is a path
-        var trimmed = title.Trim().TrimEnd('\\', '/', '>', ' ');
-        if (trimmed.Length >= 3 && char.IsLetter(trimmed[0]) && trimmed[1] == ':' && trimmed[2] == '\\')
-        {
-            if (System.IO.Directory.Exists(trimmed))
-                return trimmed;
-        }
-
-        return "Unknown";
-    }
-
-    /// <summary>
-    /// Look up a recent session entry by matching repo path.
-    /// Returns the most recently used entry for this path, or null if no match.
-    /// </summary>
-    private static RecentSession? LookupRecentSession(string repoPath, IReadOnlyList<RecentSession> recentSessions)
-    {
-        if (repoPath == "Unknown" || recentSessions.Count == 0)
-            return null;
-
-        var normalized = System.IO.Path.GetFullPath(repoPath).TrimEnd('\\', '/');
-        return recentSessions.FirstOrDefault(r =>
-            string.Equals(
-                System.IO.Path.GetFullPath(r.RepoPath).TrimEnd('\\', '/'),
-                normalized,
-                StringComparison.OrdinalIgnoreCase));
     }
 
     private static string? LookupRecentColor(string repoPath, string? customName, IReadOnlyList<RecentSession> recentSessions)
@@ -1507,7 +1257,7 @@ public class SessionViewModel : INotifyPropertyChanged
         CustomColor = color;
     }
 
-    public string StatusText => $"{Session.ActivityState} (PID {Session.ProcessId})";
+    public string StatusText => $"{Session.ActivityState} (PID {Session.ProcessId}) - ConPTY";
     public SolidColorBrush ActivityBrush => ActivityBrushes.GetValueOrDefault(Session.ActivityState, ActivityBrushes[ActivityState.Starting]);
 
     public event PropertyChangedEventHandler? PropertyChanged;

@@ -8,7 +8,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo.
 echo === Running CC Director ===
-start "" "src\CcDirector.Wpf\bin\Debug\net10.0-windows\win-x64\cc_director.exe"
+start "" "src\CcDirector.Wpf\bin\Debug\net10.0-windows\win-x64\cc_director_v2.exe"
 if %ERRORLEVEL% NEQ 0 (
     echo LAUNCH FAILED
     pause

@@ -19,6 +19,7 @@ public sealed class EmbeddedBackend : ISessionBackend
     public string Status => _status;
     public bool IsRunning => _host != null && !_host.HasExited;
     public bool HasExited => _host?.HasExited ?? true;
+    public bool IsVisible => _host?.IsVisible ?? false;
 
     /// <summary>
     /// Embedded mode doesn't use a buffer - the real console window handles display.

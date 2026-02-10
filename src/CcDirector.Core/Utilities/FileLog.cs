@@ -51,7 +51,7 @@ public static class FileLog
 
     /// <summary>Returns the current log file path (useful for display).</summary>
     public static string CurrentLogPath =>
-        Path.Combine(LogDir, $"director-{DateTime.Now:yyyy-MM-dd}.log");
+        Path.Combine(LogDir, $"director-{DateTime.Now:yyyy-MM-dd}-{Environment.ProcessId}.log");
 
     private static void WriterLoop()
     {
@@ -68,7 +68,8 @@ public static class FileLog
                     writer?.Flush();
                     writer?.Dispose();
                     currentDate = today;
-                    var path = Path.Combine(LogDir, $"director-{currentDate}.log");
+                    var pid = Environment.ProcessId;
+                    var path = Path.Combine(LogDir, $"director-{currentDate}-{pid}.log");
                     writer = new StreamWriter(path, append: true) { AutoFlush = false };
                 }
 

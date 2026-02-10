@@ -1,8 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using CcDirector.Core.Backends;
 using CcDirector.Core.Configuration;
-using CcDirector.Core.ConPty;
-using CcDirector.Core.Memory;
 
 namespace CcDirector.Core.Sessions;
 
@@ -24,44 +23,46 @@ public sealed class SessionManager : IDisposable
         _log = log;
     }
 
-    /// <summary>Create a new session that spawns claude.exe in the given repo path.</summary>
+    /// <summary>Create a new ConPty session that spawns claude.exe in the given repo path.</summary>
     public Session CreateSession(string repoPath, string? claudeArgs = null)
+    {
+        return CreateSession(repoPath, claudeArgs, SessionBackendType.ConPty);
+    }
+
+    /// <summary>Create a new session with the specified backend type.</summary>
+    public Session CreateSession(string repoPath, string? claudeArgs, SessionBackendType backendType)
     {
         if (!Directory.Exists(repoPath))
             throw new DirectoryNotFoundException($"Repository path not found: {repoPath}");
 
         var id = Guid.NewGuid();
-        var buffer = new CircularTerminalBuffer(_options.DefaultBufferSizeBytes);
-        var console = PseudoConsole.Create(120, 30);
-        var processHost = new ProcessHost(console);
+        string args = claudeArgs ?? _options.DefaultClaudeArgs ?? string.Empty;
 
-        var session = new Session(id, repoPath, repoPath, claudeArgs, console, processHost, buffer);
+        ISessionBackend backend = backendType switch
+        {
+            SessionBackendType.ConPty => new ConPtyBackend(_options.DefaultBufferSizeBytes),
+            SessionBackendType.Pipe => new PipeBackend(_options.DefaultBufferSizeBytes),
+            SessionBackendType.Embedded => throw new InvalidOperationException(
+                "Use CreateEmbeddedSession for embedded mode - requires WPF backend."),
+            _ => throw new ArgumentOutOfRangeException(nameof(backendType))
+        };
+
+        var session = new Session(id, repoPath, repoPath, claudeArgs, backend, backendType);
 
         try
         {
-            string args = claudeArgs ?? _options.DefaultClaudeArgs ?? string.Empty;
-            processHost.Start(_options.ClaudePath, args, repoPath);
-            session.Status = SessionStatus.Running;
-
-            processHost.OnExited += exitCode =>
-            {
-                session.ExitCode = exitCode;
-                session.Status = SessionStatus.Exited;
-                session.HandlePipeEvent(new Pipes.PipeMessage { HookEventName = "SessionEnd" });
-                _log?.Invoke($"Session {id} exited with code {exitCode}.");
-            };
-
-            processHost.StartDrainLoop(buffer);
-            processHost.StartExitMonitor();
+            // Get initial terminal dimensions (default 120x30)
+            backend.Start(_options.ClaudePath, args, repoPath, 120, 30);
+            session.MarkRunning();
 
             _sessions[id] = session;
-            _log?.Invoke($"Session {id} created for repo {repoPath} (PID {processHost.ProcessId}).");
+            _log?.Invoke($"Session {id} created for repo {repoPath} (PID {backend.ProcessId}, Backend={backendType}).");
 
             return session;
         }
         catch (Exception ex)
         {
-            session.Status = SessionStatus.Failed;
+            session.MarkFailed();
             _log?.Invoke($"Failed to create session for {repoPath}: {ex.Message}");
             session.Dispose();
             throw;
@@ -76,10 +77,13 @@ public sealed class SessionManager : IDisposable
             throw new DirectoryNotFoundException($"Repository path not found: {repoPath}");
 
         var id = Guid.NewGuid();
-        var buffer = new CircularTerminalBuffer(_options.DefaultBufferSizeBytes);
         string args = claudeArgs ?? _options.DefaultClaudeArgs ?? string.Empty;
 
-        var session = new Session(id, repoPath, repoPath, claudeArgs, _options.ClaudePath, args, buffer);
+        var backend = new PipeBackend(_options.DefaultBufferSizeBytes);
+        backend.Start(_options.ClaudePath, args, repoPath, 120, 30);
+
+        var session = new Session(id, repoPath, repoPath, claudeArgs, backend, SessionBackendType.Pipe);
+        session.MarkRunning();
 
         _sessions[id] = session;
         _log?.Invoke($"Pipe mode session {id} created for repo {repoPath}.");
@@ -87,17 +91,19 @@ public sealed class SessionManager : IDisposable
         return session;
     }
 
-    /// <summary>Create an embedded mode session. The WPF layer spawns the process
-    /// inside an EmbeddedConsoleHost; no buffer or ConPTY is needed.</summary>
-    public Session CreateEmbeddedSession(string repoPath, string? claudeArgs = null)
+    /// <summary>
+    /// Create an embedded mode session. The WPF layer must provide the backend
+    /// since EmbeddedBackend depends on WPF components.
+    /// </summary>
+    public Session CreateEmbeddedSession(string repoPath, string? claudeArgs, ISessionBackend embeddedBackend)
     {
         if (!Directory.Exists(repoPath))
             throw new DirectoryNotFoundException($"Repository path not found: {repoPath}");
 
         var id = Guid.NewGuid();
-        string args = claudeArgs ?? _options.DefaultClaudeArgs ?? string.Empty;
 
-        var session = new Session(id, repoPath, repoPath, args);
+        var session = new Session(id, repoPath, repoPath, claudeArgs, embeddedBackend, SessionBackendType.Embedded);
+        session.MarkRunning();
 
         _sessions[id] = session;
         _log?.Invoke($"Embedded session {id} created for repo {repoPath}.");
@@ -123,8 +129,8 @@ public sealed class SessionManager : IDisposable
     /// <summary>Return PIDs of all tracked embedded sessions.</summary>
     public HashSet<int> GetTrackedProcessIds()
         => _sessions.Values
-            .Where(s => s.Mode == SessionMode.Embedded && s.EmbeddedProcessId > 0)
-            .Select(s => s.EmbeddedProcessId)
+            .Where(s => s.BackendType == SessionBackendType.Embedded && s.ProcessId > 0)
+            .Select(s => s.ProcessId)
             .ToHashSet();
 
     /// <summary>Scan for orphaned claude.exe processes on startup.</summary>
@@ -181,13 +187,13 @@ public sealed class SessionManager : IDisposable
         }
     }
 
-    /// <summary>Register a Claude session_id → Director session mapping.</summary>
+    /// <summary>Register a Claude session_id -> Director session mapping.</summary>
     public void RegisterClaudeSession(string claudeSessionId, Guid directorSessionId)
     {
         _claudeSessionMap[claudeSessionId] = directorSessionId;
         if (_sessions.TryGetValue(directorSessionId, out var session))
             session.ClaudeSessionId = claudeSessionId;
-        _log?.Invoke($"Registered Claude session {claudeSessionId} → Director session {directorSessionId}.");
+        _log?.Invoke($"Registered Claude session {claudeSessionId} -> Director session {directorSessionId}.");
     }
 
     /// <summary>Look up a Director session by its Claude session_id.</summary>
@@ -232,7 +238,7 @@ public sealed class SessionManager : IDisposable
     public void SaveCurrentState(SessionStateStore store)
     {
         var persisted = _sessions.Values
-            .Where(s => s.Mode == SessionMode.Embedded && s.Status == SessionStatus.Running)
+            .Where(s => s.BackendType == SessionBackendType.Embedded && s.Status == SessionStatus.Running)
             .Select(s => new PersistedSession
             {
                 Id = s.Id,
@@ -241,7 +247,7 @@ public sealed class SessionManager : IDisposable
                 ClaudeArgs = s.ClaudeArgs,
                 CustomName = s.CustomName,
                 CustomColor = s.CustomColor,
-                EmbeddedProcessId = s.EmbeddedProcessId,
+                EmbeddedProcessId = s.ProcessId,
                 ConsoleHwnd = 0,
                 ClaudeSessionId = s.ClaudeSessionId,
                 ActivityState = s.ActivityState,
@@ -255,12 +261,12 @@ public sealed class SessionManager : IDisposable
 
     /// <summary>
     /// Save state of all running embedded sessions to the store.
-    /// The getHwnd delegate maps session ID → console HWND (as long), provided by the WPF layer.
+    /// The getHwnd delegate maps session ID -> console HWND (as long), provided by the WPF layer.
     /// </summary>
     public void SaveSessionState(SessionStateStore store, Func<Guid, long> getHwnd)
     {
         var persisted = _sessions.Values
-            .Where(s => s.Mode == SessionMode.Embedded && s.Status == SessionStatus.Running)
+            .Where(s => s.BackendType == SessionBackendType.Embedded && s.Status == SessionStatus.Running)
             .Select(s => new PersistedSession
             {
                 Id = s.Id,
@@ -269,7 +275,7 @@ public sealed class SessionManager : IDisposable
                 ClaudeArgs = s.ClaudeArgs,
                 CustomName = s.CustomName,
                 CustomColor = s.CustomColor,
-                EmbeddedProcessId = s.EmbeddedProcessId,
+                EmbeddedProcessId = s.ProcessId,
                 ConsoleHwnd = getHwnd(s.Id),
                 ClaudeSessionId = s.ClaudeSessionId,
                 ActivityState = s.ActivityState,
@@ -281,12 +287,13 @@ public sealed class SessionManager : IDisposable
         _log?.Invoke($"Saved {persisted.Count} session(s) to state store.");
     }
 
-    /// <summary>Restore a single persisted embedded session into tracking.</summary>
-    public Session RestoreEmbeddedSession(PersistedSession ps)
+    /// <summary>Restore a single persisted embedded session into tracking.
+    /// The WPF layer must provide the reattached backend.</summary>
+    public Session RestoreEmbeddedSession(PersistedSession ps, ISessionBackend embeddedBackend)
     {
         var session = new Session(
             ps.Id, ps.RepoPath, ps.WorkingDirectory, ps.ClaudeArgs,
-            ps.EmbeddedProcessId, ps.ClaudeSessionId, ps.ActivityState, ps.CreatedAt,
+            embeddedBackend, ps.ClaudeSessionId, ps.ActivityState, ps.CreatedAt,
             ps.CustomName, ps.CustomColor);
 
         _sessions[session.Id] = session;
@@ -294,19 +301,19 @@ public sealed class SessionManager : IDisposable
         if (ps.ClaudeSessionId != null)
             _claudeSessionMap[ps.ClaudeSessionId] = session.Id;
 
-        _log?.Invoke($"Restored session {session.Id} (PID {ps.EmbeddedProcessId}).");
+        _log?.Invoke($"Restored session {session.Id} (PID {session.ProcessId}).");
         return session;
     }
 
     /// <summary>
-    /// Load persisted sessions from the store. Validates each PID is still alive,
-    /// restores valid ones, and returns tuples of (Session, PersistedSession) so
-    /// the WPF layer can use the stored HWND for reattach.
+    /// Load persisted sessions from the store. Returns PersistedSession records
+    /// for the WPF layer to reattach backends. Call RestoreEmbeddedSession for each
+    /// successful reattach.
     /// </summary>
-    public List<(Session Session, PersistedSession Persisted)> LoadPersistedSessions(SessionStateStore store)
+    public List<PersistedSession> LoadPersistedSessions(SessionStateStore store)
     {
         var persisted = store.Load();
-        var restored = new List<(Session, PersistedSession)>();
+        var valid = new List<PersistedSession>();
 
         foreach (var ps in persisted)
         {
@@ -320,22 +327,20 @@ public sealed class SessionManager : IDisposable
                     continue;
                 }
                 proc.Dispose();
+                valid.Add(ps);
             }
             catch
             {
                 _log?.Invoke($"Persisted session {ps.Id} PID {ps.EmbeddedProcessId} not found, skipping.");
-                continue;
             }
-
-            restored.Add((RestoreEmbeddedSession(ps), ps));
         }
 
-        _log?.Invoke($"Loaded {restored.Count}/{persisted.Count} persisted session(s).");
+        _log?.Invoke($"Found {valid.Count}/{persisted.Count} valid persisted session(s).");
 
         // Re-save with only the live sessions (prunes dead entries)
-        store.Save(restored.Select(r => r.Item2).ToList());
+        store.Save(valid);
 
-        return restored;
+        return valid;
     }
 
     public void Dispose()
