@@ -43,17 +43,38 @@
             </Border>
         </Grid>
 
-        <!-- Bottom Bar -->
+        <!-- Bottom Bar with Input -->
         <Border Grid.Row="2" Background="#333">
             <Grid Margin="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="Click in terminal area to focus. Type to send input."
-                           Foreground="#999" VerticalAlignment="Center"/>
-                <TextBlock Grid.Column="1" x:Name="DimensionsText" Text="120x30"
-                           Foreground="#666" VerticalAlignment="Center"/>
+                <TextBox x:Name="InputBox"
+                         Grid.Column="0"
+                         Background="#1E1E1E"
+                         Foreground="#CCC"
+                         BorderBrush="#555"
+                         CaretBrush="#CCC"
+                         Padding="8,6"
+                         FontFamily="Consolas"
+                         FontSize="14"
+                         VerticalContentAlignment="Center"
+                         KeyDown="InputBox_KeyDown"/>
+                <Button x:Name="SendButton"
+                        Grid.Column="1"
+                        Content="Send"
+                        Click="SendButton_Click"
+                        Background="#E65100"
+                        Foreground="White"
+                        BorderThickness="0"
+                        Padding="16,6"
+                        Margin="8,0"
+                        FontWeight="SemiBold"
+                        Cursor="Hand"/>
+                <TextBlock Grid.Column="2" x:Name="DimensionsText" Text="120x30"
+                           Foreground="#666" VerticalAlignment="Center" Margin="8,0,0,0"/>
             </Grid>
         </Border>
     </Grid>

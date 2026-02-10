@@ -1,5 +1,7 @@
 using System.ComponentModel;
+using System.Text;
 using System.Windows;
+using System.Windows.Input;
 using ConPtyTest.ConPty;
 using ConPtyTest.Controls;
 using ConPtyTest.Memory;
@@ -42,6 +44,9 @@ public partial class MainWindow : Window
         DimensionsText.Text = $"{cols}x{rows}";
 
         StartConPtySession((short)cols, (short)rows);
+
+        // Auto-focus the input box
+        InputBox.Focus();
     }
 
     private void StartConPtySession(short cols, short rows)
@@ -103,6 +108,41 @@ public partial class MainWindow : Window
             StatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(255, 100, 100));
         });
+    }
+
+    private async void SendInput()
+    {
+        var text = InputBox.Text;
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        // Clear the input box
+        InputBox.Clear();
+
+        // Send the text (will appear as paste)
+        var bytes = Encoding.UTF8.GetBytes(text);
+        _processHost?.Write(bytes);
+
+        // Wait for Claude to process the paste
+        await Task.Delay(100);
+
+        // Now send Enter
+        _processHost?.Write(new byte[] { 0x0D });
+    }
+
+    private void SendButton_Click(object sender, RoutedEventArgs e)
+    {
+        SendInput();
+        InputBox.Focus();
+    }
+
+    private void InputBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            SendInput();
+        }
     }
 
     private async void OnClosing(object? sender, CancelEventArgs e)
