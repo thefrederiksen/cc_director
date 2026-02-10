@@ -32,6 +32,13 @@ public partial class CloneRepoDialog : Window
         Loaded += (_, _) => UrlInput.Focus();
     }
 
+    private void BtnBrowseGitHub_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new GitHubRepoPickerDialog { Owner = this };
+        if (picker.ShowDialog() == true && !string.IsNullOrEmpty(picker.SelectedUrl))
+            UrlInput.Text = picker.SelectedUrl;
+    }
+
     private void BtnBrowse_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog

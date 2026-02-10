@@ -125,4 +125,27 @@ public class GitStatusProviderTests
         Assert.Equal("R", result.StagedChanges[0].StatusChar);
         Assert.Equal("new.cs", result.StagedChanges[0].FilePath);
     }
+
+    [Fact]
+    public void ParsePorcelain_UntrackedDirectoryTrailingSlash()
+    {
+        var result = GitStatusProvider.ParsePorcelainOutput("?? .claude/\n");
+
+        Assert.True(result.Success);
+        Assert.Single(result.UnstagedChanges);
+        Assert.Equal(".claude", result.UnstagedChanges[0].FilePath);
+        Assert.Equal(".claude", result.UnstagedChanges[0].FileName);
+        Assert.Equal(GitFileStatus.Untracked, result.UnstagedChanges[0].Status);
+    }
+
+    [Fact]
+    public void ParsePorcelain_UntrackedNestedDirectoryTrailingSlash()
+    {
+        var result = GitStatusProvider.ParsePorcelainOutput("?? src/components/\n");
+
+        Assert.True(result.Success);
+        Assert.Single(result.UnstagedChanges);
+        Assert.Equal("src/components", result.UnstagedChanges[0].FilePath);
+        Assert.Equal("components", result.UnstagedChanges[0].FileName);
+    }
 }

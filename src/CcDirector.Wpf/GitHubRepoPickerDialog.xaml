@@ -1,0 +1,161 @@
+<Window x:Class="CcDirector.Wpf.GitHubRepoPickerDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Browse GitHub Repositories"
+        Width="550" Height="450"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResizeWithGrip"
+        Background="#252526">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Filter -->
+        <TextBox x:Name="FilterBox" Grid.Row="0"
+                 Background="#1E1E1E"
+                 Foreground="#CCCCCC"
+                 CaretBrush="#CCCCCC"
+                 BorderBrush="#3C3C3C"
+                 Padding="8,6"
+                 FontSize="13"
+                 TextChanged="FilterBox_TextChanged">
+            <TextBox.Style>
+                <Style TargetType="TextBox">
+                    <Style.Triggers>
+                        <Trigger Property="Text" Value="">
+                            <Setter Property="Tag" Value="Filter repositories..." />
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBox.Style>
+        </TextBox>
+        <TextBlock Grid.Row="0"
+                   Text="Filter repositories..."
+                   Foreground="#666666"
+                   FontSize="13"
+                   Padding="10,7"
+                   IsHitTestVisible="False">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Text, ElementName=FilterBox}" Value="">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+
+        <!-- Repo list -->
+        <ListBox x:Name="RepoList" Grid.Row="1"
+                 Margin="0,10,0,10"
+                 Background="#1E1E1E"
+                 BorderBrush="#3C3C3C"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 MouseDoubleClick="RepoList_MouseDoubleClick">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="Padding" Value="10,8" />
+                    <Setter Property="Foreground" Value="#CCCCCC" />
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="BorderThickness" Value="0" />
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListBoxItem">
+                                <Border Background="{TemplateBinding Background}"
+                                        Padding="{TemplateBinding Padding}"
+                                        BorderBrush="#333333"
+                                        BorderThickness="0,0,0,1">
+                                    <ContentPresenter />
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="#094771" />
+                                    </Trigger>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#2A2D2E" />
+                                    </Trigger>
+                                    <MultiTrigger>
+                                        <MultiTrigger.Conditions>
+                                            <Condition Property="IsSelected" Value="True" />
+                                            <Condition Property="IsMouseOver" Value="True" />
+                                        </MultiTrigger.Conditions>
+                                        <Setter Property="Background" Value="#094771" />
+                                    </MultiTrigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </ListBox.ItemContainerStyle>
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0"
+                                   Text="{Binding Name}"
+                                   Foreground="#CCCCCC"
+                                   FontSize="13"
+                                   FontWeight="SemiBold" />
+                        <Border Grid.Row="0" Grid.Column="1"
+                                Background="{Binding BadgeBackground}"
+                                CornerRadius="3"
+                                Padding="6,1"
+                                VerticalAlignment="Center">
+                            <TextBlock Text="{Binding BadgeText}"
+                                       Foreground="{Binding BadgeForeground}"
+                                       FontSize="11" />
+                        </Border>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                   Text="{Binding Description}"
+                                   Foreground="#888888"
+                                   FontSize="12"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,2,0,0"
+                                   Visibility="{Binding DescriptionVisibility}" />
+                    </Grid>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <!-- Loading / Error / Buttons -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock x:Name="StatusText" Grid.Column="0"
+                       Foreground="#888888"
+                       FontSize="12"
+                       VerticalAlignment="Center" />
+
+            <Button x:Name="BtnSelect" Grid.Column="1"
+                    Content="Select" Width="80" Height="28"
+                    Click="BtnSelect_Click"
+                    IsEnabled="False"
+                    Background="#007ACC" Foreground="White"
+                    BorderThickness="0" Margin="0,0,8,0"
+                    Cursor="Hand" />
+            <Button Grid.Column="2"
+                    Content="Cancel" Width="80" Height="28"
+                    Click="BtnCancel_Click"
+                    Background="#3C3C3C" Foreground="#CCCCCC"
+                    BorderThickness="0"
+                    Cursor="Hand" />
+        </Grid>
+    </Grid>
+</Window>

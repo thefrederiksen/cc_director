@@ -15,20 +15,31 @@
 
         <!-- File leaf node template -->
         <DataTemplate DataType="{x:Type local:GitFileLeafNode}">
-            <DockPanel>
-                <TextBlock DockPanel.Dock="Right"
-                           Text="{Binding StatusChar}"
-                           Foreground="{Binding StatusBrush}"
-                           FontFamily="Cascadia Mono, Consolas"
-                           FontSize="12" FontWeight="Bold"
-                           Margin="8,0,4,0" VerticalAlignment="Center" />
-                <TextBlock Text="{Binding DisplayName}"
-                           Foreground="#CCCCCC" FontSize="12"
-                           VerticalAlignment="Center" />
-                <TextBlock Text="{Binding FolderPath}"
-                           Foreground="#666666" FontSize="10"
-                           Margin="8,0,0,0" VerticalAlignment="Center" />
-            </DockPanel>
+            <Border Background="Transparent"
+                    MouseLeftButtonDown="FileNode_MouseLeftButtonDown">
+                <Border.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Open in VS Code"
+                                  Click="FileNode_OpenInVsCode_Click" />
+                        <MenuItem Header="Copy Relative Path"
+                                  Click="FileNode_CopyPath_Click" />
+                    </ContextMenu>
+                </Border.ContextMenu>
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Right"
+                               Text="{Binding StatusChar}"
+                               Foreground="{Binding StatusBrush}"
+                               FontFamily="Cascadia Mono, Consolas"
+                               FontSize="12" FontWeight="Bold"
+                               Margin="8,0,4,0" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding DisplayName}"
+                               Foreground="#CCCCCC" FontSize="12"
+                               VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding FolderPath}"
+                               Foreground="#666666" FontSize="10"
+                               Margin="8,0,0,0" VerticalAlignment="Center" />
+                </DockPanel>
+            </Border>
         </DataTemplate>
 
         <!-- TreeViewItem expand/collapse toggle -->

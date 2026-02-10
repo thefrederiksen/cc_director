@@ -240,6 +240,7 @@ public sealed class SessionManager : IDisposable
                 WorkingDirectory = s.WorkingDirectory,
                 ClaudeArgs = s.ClaudeArgs,
                 CustomName = s.CustomName,
+                CustomColor = s.CustomColor,
                 EmbeddedProcessId = s.EmbeddedProcessId,
                 ConsoleHwnd = 0,
                 ClaudeSessionId = s.ClaudeSessionId,
@@ -267,6 +268,7 @@ public sealed class SessionManager : IDisposable
                 WorkingDirectory = s.WorkingDirectory,
                 ClaudeArgs = s.ClaudeArgs,
                 CustomName = s.CustomName,
+                CustomColor = s.CustomColor,
                 EmbeddedProcessId = s.EmbeddedProcessId,
                 ConsoleHwnd = getHwnd(s.Id),
                 ClaudeSessionId = s.ClaudeSessionId,
@@ -285,7 +287,7 @@ public sealed class SessionManager : IDisposable
         var session = new Session(
             ps.Id, ps.RepoPath, ps.WorkingDirectory, ps.ClaudeArgs,
             ps.EmbeddedProcessId, ps.ClaudeSessionId, ps.ActivityState, ps.CreatedAt,
-            ps.CustomName);
+            ps.CustomName, ps.CustomColor);
 
         _sessions[session.Id] = session;
 

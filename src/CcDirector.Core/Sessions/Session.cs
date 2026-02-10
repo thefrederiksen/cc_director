@@ -72,6 +72,9 @@ public sealed class Session : IDisposable
     /// <summary>User-defined display name for this session. Null means use default (repo folder name).</summary>
     public string? CustomName { get; set; }
 
+    /// <summary>User-chosen header color (hex string like "#2563EB"). Null means default dark header.</summary>
+    public string? CustomColor { get; set; }
+
     /// <summary>Fires when ActivityState changes. Args: (oldState, newState).</summary>
     public event Action<ActivityState, ActivityState>? OnActivityStateChanged;
 
@@ -150,7 +153,8 @@ public sealed class Session : IDisposable
         string? claudeSessionId,
         ActivityState activityState,
         DateTimeOffset createdAt,
-        string? customName = null)
+        string? customName = null,
+        string? customColor = null)
     {
         Mode = SessionMode.Embedded;
         Id = id;
@@ -160,6 +164,7 @@ public sealed class Session : IDisposable
         EmbeddedProcessId = embeddedProcessId;
         ClaudeSessionId = claudeSessionId;
         CustomName = customName;
+        CustomColor = customColor;
         Buffer = new CircularTerminalBuffer(1);
         CreatedAt = createdAt;
         Status = SessionStatus.Running;

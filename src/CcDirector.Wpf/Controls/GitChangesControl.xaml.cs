@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CcDirector.Core.Git;
@@ -21,6 +23,7 @@ public class GitFolderNode : GitTreeNode
 public class GitFileLeafNode : GitTreeNode
 {
     public string FolderPath { get; set; } = "";
+    public string RelativePath { get; set; } = "";
     public string StatusChar { get; set; } = "";
     public SolidColorBrush StatusBrush { get; set; } = null!;
 }
@@ -216,6 +219,7 @@ public partial class GitChangesControl : UserControl
             {
                 DisplayName = file.FileName,
                 FolderPath = dir,
+                RelativePath = file.FilePath,
                 StatusChar = file.Status == GitFileStatus.Untracked ? "U" : file.StatusChar,
                 StatusBrush = GetStatusBrush(file.Status)
             });
@@ -261,4 +265,42 @@ public partial class GitChangesControl : UserControl
         GitFileStatus.Untracked => BrushUntracked,
         _ => BrushDefault
     };
+
+    internal void FileNode_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2 && sender is FrameworkElement fe && fe.DataContext is GitFileLeafNode node)
+        {
+            OpenFileInVsCode(node.RelativePath);
+            e.Handled = true;
+        }
+    }
+
+    internal void FileNode_OpenInVsCode_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is GitFileLeafNode node)
+            OpenFileInVsCode(node.RelativePath);
+    }
+
+    internal void FileNode_CopyPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is GitFileLeafNode node)
+            Clipboard.SetText(node.RelativePath);
+    }
+
+    private void OpenFileInVsCode(string relativePath)
+    {
+        if (_repoPath == null || string.IsNullOrEmpty(relativePath)) return;
+        var fullPath = Path.Combine(_repoPath, relativePath);
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "code",
+                Arguments = $"--goto \"{fullPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+        }
+        catch { /* VS Code not installed or not in PATH */ }
+    }
 }

@@ -10,6 +10,7 @@ public class PersistedSession
     public string WorkingDirectory { get; set; } = string.Empty;
     public string? ClaudeArgs { get; set; }
     public string? CustomName { get; set; }
+    public string? CustomColor { get; set; }
     public int EmbeddedProcessId { get; set; }
     public long ConsoleHwnd { get; set; }
     public string? ClaudeSessionId { get; set; }

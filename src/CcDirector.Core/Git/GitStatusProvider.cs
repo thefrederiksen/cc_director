@@ -30,7 +30,7 @@ public class GitStatusProvider
             var psi = new ProcessStartInfo
             {
                 FileName = "git",
-                Arguments = "status --porcelain=v1",
+                Arguments = "status --porcelain=v1 -u",
                 WorkingDirectory = repoPath,
                 CreateNoWindow = true,
                 UseShellExecute = false,
@@ -78,7 +78,12 @@ public class GitStatusProvider
             if (filePath.Contains(" -> "))
                 filePath = filePath.Split(" -> ")[1];
 
+            // Strip trailing slashes from directory entries
+            filePath = filePath.TrimEnd('/', '\\');
+
             var fileName = Path.GetFileName(filePath);
+            if (string.IsNullOrEmpty(fileName))
+                fileName = filePath;
 
             // Untracked files
             if (x == '?' && y == '?')

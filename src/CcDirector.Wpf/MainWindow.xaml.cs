@@ -10,6 +10,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using CcDirector.Core.Configuration;
+using CcDirector.Core.Git;
 using CcDirector.Core.Pipes;
 using CcDirector.Core.Sessions;
 using CcDirector.Core.Utilities;
@@ -30,6 +31,10 @@ public partial class MainWindow : Window
     private EmbeddedConsoleHost? _activeEmbeddedHost;
     private Session? _activeSession;
     private CancellationTokenSource? _enterRetryCts;
+    private SessionViewModel? _headerBoundVm;
+    private readonly System.Windows.Threading.DispatcherTimer _repoChangeTimer;
+    private readonly GitStatusProvider _gitStatusProvider = new();
+    private bool _repoChangeRefreshRunning;
     public MainWindow()
     {
         InitializeComponent();
@@ -42,6 +47,12 @@ public partial class MainWindow : Window
         Activated += MainWindow_Activated;
         Deactivated += MainWindow_Deactivated;
         SessionTabs.SelectionChanged += SessionTabs_SelectionChanged;
+
+        _repoChangeTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(30)
+        };
+        _repoChangeTimer.Tick += async (_, _) => await RefreshRepoChangeCountsAsync();
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -201,16 +212,18 @@ public partial class MainWindow : Window
                 {
                     // Switch to existing session, update recent timestamp
                     SessionList.SelectedItem = existing;
-                    recentStore.Add(dialog.SelectedPath, dialog.SelectedCustomName);
+                    recentStore.Add(dialog.SelectedPath, dialog.SelectedCustomName, existing.Session.CustomColor);
                     return;
                 }
 
                 // No duplicate — create new session with the recent name
+                // Look up color from the recent entry
+                var recentColor = LookupRecentColor(dialog.SelectedPath, dialog.SelectedCustomName, recentStore.GetRecent());
                 var vm = CreateSession(dialog.SelectedPath);
                 if (vm == null) return;
-                vm.Rename(dialog.SelectedCustomName);
+                vm.Rename(dialog.SelectedCustomName, recentColor);
                 PersistSessionState();
-                recentStore.Add(dialog.SelectedPath, dialog.SelectedCustomName);
+                recentStore.Add(dialog.SelectedPath, dialog.SelectedCustomName, recentColor);
             }
             else
             {
@@ -219,7 +232,7 @@ public partial class MainWindow : Window
                 if (vm == null) return;
                 ShowRenameDialog(vm);
                 if (!string.IsNullOrWhiteSpace(vm.Session.CustomName))
-                    recentStore.Add(dialog.SelectedPath, vm.Session.CustomName);
+                    recentStore.Add(dialog.SelectedPath, vm.Session.CustomName, vm.Session.CustomColor);
             }
         }
     }
@@ -405,6 +418,9 @@ public partial class MainWindow : Window
             _terminalControl.Attach(session);
         }
 
+        // Show session header banner
+        UpdateSessionHeader();
+
         // Attach git changes polling
         GitChanges.Attach(session.RepoPath);
 
@@ -424,9 +440,101 @@ public partial class MainWindow : Window
         _activeEmbeddedHost = null;
         TerminalArea.Child = null;
 
+        // Hide session header banner
+        UpdateSessionHeader();
+
         GitChanges.Detach();
         SessionTabs.Visibility = Visibility.Collapsed;
         PlaceholderText.Visibility = Visibility.Visible;
+    }
+
+    private static readonly Dictionary<ActivityState, string> ActivityLabels = new()
+    {
+        [ActivityState.Starting] = "Starting",
+        [ActivityState.Idle] = "Idle",
+        [ActivityState.Working] = "Working",
+        [ActivityState.WaitingForInput] = "Your Turn",
+        [ActivityState.WaitingForPerm] = "Needs Permission",
+        [ActivityState.Exited] = "Exited",
+    };
+
+    private void UpdateSessionHeader()
+    {
+        // Unsubscribe from previous VM
+        if (_headerBoundVm != null)
+        {
+            _headerBoundVm.PropertyChanged -= OnHeaderVmPropertyChanged;
+            _headerBoundVm = null;
+        }
+
+        if (_activeSession == null)
+        {
+            SessionHeaderBanner.Visibility = Visibility.Collapsed;
+            DeferConsolePositionUpdate();
+            return;
+        }
+
+        // Find the VM for the active session
+        var vm = _sessions.FirstOrDefault(s => s.Session.Id == _activeSession.Id);
+        if (vm == null)
+        {
+            SessionHeaderBanner.Visibility = Visibility.Collapsed;
+            DeferConsolePositionUpdate();
+            return;
+        }
+
+        _headerBoundVm = vm;
+        vm.PropertyChanged += OnHeaderVmPropertyChanged;
+
+        HeaderSessionName.Text = vm.DisplayName;
+        SessionHeaderBanner.Background = vm.CustomColorBrush;
+        UpdateHeaderActivityState(vm);
+        SessionHeaderBanner.Visibility = Visibility.Visible;
+        DeferConsolePositionUpdate();
+    }
+
+    private void UpdateHeaderActivityState(SessionViewModel vm)
+    {
+        var activityBrush = vm.ActivityBrush;
+
+        // Create semi-transparent version of the activity color for badge background
+        var activityColor = activityBrush.Color;
+        var badgeBg = new SolidColorBrush(Color.FromArgb(0x33, activityColor.R, activityColor.G, activityColor.B));
+        badgeBg.Freeze();
+        HeaderStateBadge.Background = badgeBg;
+
+        HeaderStateBadgeText.Text = ActivityLabels.GetValueOrDefault(
+            vm.Session.ActivityState, "Starting");
+
+        // Set header font color based on background luminance
+        var headerBg = vm.CustomColorBrush.Color;
+        var foreground = GetContrastForeground(headerBg);
+        HeaderSessionName.Foreground = foreground;
+    }
+
+    private static SolidColorBrush GetContrastForeground(Color c)
+    {
+        double luminance = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255.0;
+        return luminance < 0.5 ? Brushes.White : Brushes.Black;
+    }
+
+    private void OnHeaderVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is not SessionViewModel vm) return;
+
+        if (e.PropertyName is nameof(SessionViewModel.ActivityBrush) or nameof(SessionViewModel.StatusText))
+        {
+            UpdateHeaderActivityState(vm);
+        }
+        else if (e.PropertyName == nameof(SessionViewModel.DisplayName))
+        {
+            HeaderSessionName.Text = vm.DisplayName;
+        }
+        else if (e.PropertyName is nameof(SessionViewModel.CustomColor) or nameof(SessionViewModel.CustomColorBrush))
+        {
+            SessionHeaderBanner.Background = vm.CustomColorBrush;
+            UpdateHeaderActivityState(vm);
+        }
     }
 
     private void UpdateConsolePosition()
@@ -513,7 +621,15 @@ public partial class MainWindow : Window
     {
         // Refresh repo list when Repositories tab is selected (index 2)
         if (SessionTabs.SelectedIndex == 2)
+        {
             RefreshRepoManagerList();
+            _ = RefreshRepoChangeCountsAsync();
+            _repoChangeTimer.Start();
+        }
+        else
+        {
+            _repoChangeTimer.Stop();
+        }
 
         if (_activeEmbeddedHost == null) return;
 
@@ -700,15 +816,16 @@ public partial class MainWindow : Window
                     string repoPath = ExtractRepoPathFromTitle(
                         EmbeddedConsoleHost.GetWindowTitle(host.ConsoleHwnd));
 
-                    // Look up custom name from recent sessions by repo path
-                    string? customName = LookupRecentName(repoPath, recentSessions);
+                    // Look up custom name and color from recent sessions by repo path
+                    var recentMatch = LookupRecentSession(repoPath, recentSessions);
 
                     var ps = new PersistedSession
                     {
                         Id = Guid.NewGuid(),
                         RepoPath = repoPath,
                         WorkingDirectory = repoPath,
-                        CustomName = customName,
+                        CustomName = recentMatch?.CustomName,
+                        CustomColor = recentMatch?.CustomColor,
                         EmbeddedProcessId = proc.Id,
                         ActivityState = ActivityState.Idle,
                         CreatedAt = DateTimeOffset.UtcNow,
@@ -726,7 +843,7 @@ public partial class MainWindow : Window
                     };
 
                     reconnected++;
-                    FileLog.Write($"[Reconnect] Adopted PID {proc.Id} as session {session.Id}, repo=\"{repoPath}\", name=\"{customName ?? "(none)"}\"");
+                    FileLog.Write($"[Reconnect] Adopted PID {proc.Id} as session {session.Id}, repo=\"{repoPath}\", name=\"{recentMatch?.CustomName ?? "(none)"}\"");
                 }
                 catch (Exception ex)
                 {
@@ -799,22 +916,33 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Look up a custom session name from the recent sessions store by matching repo path.
-    /// Returns the most recently used name for this path, or null if no match.
+    /// Look up a recent session entry by matching repo path.
+    /// Returns the most recently used entry for this path, or null if no match.
     /// </summary>
-    private static string? LookupRecentName(string repoPath, IReadOnlyList<RecentSession> recentSessions)
+    private static RecentSession? LookupRecentSession(string repoPath, IReadOnlyList<RecentSession> recentSessions)
+    {
+        if (repoPath == "Unknown" || recentSessions.Count == 0)
+            return null;
+
+        var normalized = System.IO.Path.GetFullPath(repoPath).TrimEnd('\\', '/');
+        return recentSessions.FirstOrDefault(r =>
+            string.Equals(
+                System.IO.Path.GetFullPath(r.RepoPath).TrimEnd('\\', '/'),
+                normalized,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? LookupRecentColor(string repoPath, string? customName, IReadOnlyList<RecentSession> recentSessions)
     {
         if (repoPath == "Unknown" || recentSessions.Count == 0)
             return null;
 
         var normalized = System.IO.Path.GetFullPath(repoPath).TrimEnd('\\', '/');
         var match = recentSessions.FirstOrDefault(r =>
-            string.Equals(
-                System.IO.Path.GetFullPath(r.RepoPath).TrimEnd('\\', '/'),
-                normalized,
-                StringComparison.OrdinalIgnoreCase));
+            string.Equals(System.IO.Path.GetFullPath(r.RepoPath).TrimEnd('\\', '/'), normalized, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(r.CustomName, customName, StringComparison.Ordinal));
 
-        return match?.CustomName;
+        return match?.CustomColor;
     }
 
     private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)
@@ -899,6 +1027,52 @@ public partial class MainWindow : Window
             .ToList();
     }
 
+    private async Task RefreshRepoChangeCountsAsync()
+    {
+        if (_repoChangeRefreshRunning) return;
+        _repoChangeRefreshRunning = true;
+
+        try
+        {
+            var app = (App)Application.Current;
+            var repos = app.RepositoryRegistry.Repositories.ToList();
+
+            using var semaphore = new SemaphoreSlim(4);
+            var tasks = repos.Select(async repo =>
+            {
+                await semaphore.WaitAsync();
+                try
+                {
+                    if (!System.IO.Directory.Exists(repo.Path)) return;
+                    var result = await _gitStatusProvider.GetStatusAsync(repo.Path);
+                    if (result.Success)
+                    {
+                        int count = result.StagedChanges.Count + result.UnstagedChanges.Count;
+                        Dispatcher.BeginInvoke(() => repo.UncommittedCount = count);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    FileLog.Write($"[RepoChanges] Error checking {repo.Path}: {ex.Message}");
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[RepoChanges] RefreshRepoChangeCounts error: {ex.Message}");
+        }
+        finally
+        {
+            _repoChangeRefreshRunning = false;
+        }
+    }
+
     private async void BtnCloneRepo_Click(object sender, RoutedEventArgs e)
     {
         var urlDialog = new CloneRepoDialog { Owner = this };
@@ -941,6 +1115,7 @@ public partial class MainWindow : Window
             var app = (App)Application.Current;
             app.RepositoryRegistry.TryAdd(destination);
             RefreshRepoManagerList();
+            _ = RefreshRepoChangeCountsAsync();
 
             MessageBox.Show(this, $"Repository cloned to:\n{destination}", "Clone Complete",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -963,7 +1138,10 @@ public partial class MainWindow : Window
         {
             var app = (App)Application.Current;
             if (app.RepositoryRegistry.TryAdd(dialog.FolderName))
+            {
                 RefreshRepoManagerList();
+                _ = RefreshRepoChangeCountsAsync();
+            }
             else
                 MessageBox.Show(this, "Repository is already registered.", "Add Repository",
                     MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1002,6 +1180,7 @@ public partial class MainWindow : Window
             var app = (App)Application.Current;
             app.RepositoryRegistry.TryAdd(dialog.FolderName);
             RefreshRepoManagerList();
+            _ = RefreshRepoChangeCountsAsync();
         }
         catch (Exception ex)
         {
@@ -1033,7 +1212,7 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(vm.Session.CustomName))
         {
             var app = (App)Application.Current;
-            app.RecentSessionStore.Add(repo.Path, vm.Session.CustomName);
+            app.RecentSessionStore.Add(repo.Path, vm.Session.CustomName, vm.Session.CustomColor);
         }
 
         // Switch to Terminal tab to show the new session
@@ -1067,14 +1246,15 @@ public partial class MainWindow : Window
         var app = (App)Application.Current;
         app.RepositoryRegistry.Remove(repo.Path);
         RefreshRepoManagerList();
+        _ = RefreshRepoChangeCountsAsync();
     }
 
     private void ShowRenameDialog(SessionViewModel vm)
     {
-        var dialog = new RenameSessionDialog(vm.DisplayName) { Owner = this };
+        var dialog = new RenameSessionDialog(vm.DisplayName, vm.Session.CustomColor) { Owner = this };
         if (dialog.ShowDialog() == true)
         {
-            vm.Rename(dialog.SessionName);
+            vm.Rename(dialog.SessionName, dialog.SelectedColor);
             PersistSessionState();
         }
     }
@@ -1280,15 +1460,53 @@ public class SessionViewModel : INotifyPropertyChanged
         session.OnActivityStateChanged += OnActivityStateChanged;
     }
 
+    private static readonly SolidColorBrush DefaultHeaderBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x25, 0x25, 0x26)));
+
     public string DisplayName => !string.IsNullOrWhiteSpace(Session.CustomName)
         ? Session.CustomName
         : System.IO.Path.GetFileName(Session.RepoPath.TrimEnd('\\', '/'));
 
-    public void Rename(string? newName)
+    public string? CustomColor
+    {
+        get => Session.CustomColor;
+        set
+        {
+            Session.CustomColor = value;
+            _customColorBrush = null;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CustomColorBrush));
+        }
+    }
+
+    private SolidColorBrush? _customColorBrush;
+    public SolidColorBrush CustomColorBrush
+    {
+        get
+        {
+            if (_customColorBrush != null) return _customColorBrush;
+            if (!string.IsNullOrWhiteSpace(Session.CustomColor))
+            {
+                try
+                {
+                    var color = (Color)ColorConverter.ConvertFromString(Session.CustomColor);
+                    _customColorBrush = Freeze(new SolidColorBrush(color));
+                    return _customColorBrush;
+                }
+                catch { /* fall through to default */ }
+            }
+            return DefaultHeaderBrush;
+        }
+    }
+
+    public void Rename(string? newName, string? color = null)
     {
         Session.CustomName = string.IsNullOrWhiteSpace(newName) ? null : newName.Trim();
         OnPropertyChanged(nameof(DisplayName));
+
+        // Update color
+        CustomColor = color;
     }
+
     public string StatusText => $"{Session.ActivityState} (PID {Session.ProcessId})";
     public SolidColorBrush ActivityBrush => ActivityBrushes.GetValueOrDefault(Session.ActivityState, ActivityBrushes[ActivityState.Starting]);
 

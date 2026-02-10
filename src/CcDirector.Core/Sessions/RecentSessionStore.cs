@@ -6,6 +6,7 @@ public class RecentSession
 {
     public string RepoPath { get; set; } = string.Empty;
     public string? CustomName { get; set; }
+    public string? CustomColor { get; set; }
     public DateTime LastUsed { get; set; }
 }
 
@@ -56,7 +57,7 @@ public class RecentSessionStore
         }
     }
 
-    public void Add(string repoPath, string? customName)
+    public void Add(string repoPath, string? customName, string? customColor = null)
     {
         if (string.IsNullOrWhiteSpace(customName))
             return;
@@ -72,6 +73,7 @@ public class RecentSessionStore
         {
             RepoPath = normalized,
             CustomName = customName,
+            CustomColor = customColor,
             LastUsed = DateTime.UtcNow
         });
 

@@ -12,6 +12,8 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <TextBlock Grid.Row="0"
@@ -29,7 +31,16 @@
                  FontSize="14"
                  KeyDown="NameInput_KeyDown" />
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal"
+        <TextBlock Grid.Row="2"
+                   Text="Header color:"
+                   Foreground="#CCCCCC"
+                   FontSize="14"
+                   Margin="0,16,0,8" />
+
+        <WrapPanel x:Name="ColorSwatchPanel" Grid.Row="3"
+                   Orientation="Horizontal" />
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal"
                     HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button Content="OK" Width="80" Height="28"
                     Click="BtnOk_Click"
