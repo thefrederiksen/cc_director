@@ -277,14 +277,34 @@ public partial class GitChangesControl : UserControl
 
     internal void FileNode_OpenInVsCode_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is GitFileLeafNode node)
+        if (GetNodeFromMenuItem(sender) is GitFileLeafNode node)
             OpenFileInVsCode(node.RelativePath);
     }
 
-    internal void FileNode_CopyPath_Click(object sender, RoutedEventArgs e)
+    internal void FileNode_CopyFullPath_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is GitFileLeafNode node)
+        if (_repoPath != null && GetNodeFromMenuItem(sender) is GitFileLeafNode node)
+        {
+            var fullPath = Path.Combine(_repoPath, node.RelativePath);
+            Clipboard.SetText(fullPath);
+        }
+    }
+
+    internal void FileNode_CopyRelativePath_Click(object sender, RoutedEventArgs e)
+    {
+        if (GetNodeFromMenuItem(sender) is GitFileLeafNode node)
             Clipboard.SetText(node.RelativePath);
+    }
+
+    private static GitFileLeafNode? GetNodeFromMenuItem(object sender)
+    {
+        if (sender is MenuItem mi && mi.Parent is ContextMenu cm
+            && cm.PlacementTarget is FrameworkElement fe
+            && fe.DataContext is GitFileLeafNode node)
+        {
+            return node;
+        }
+        return null;
     }
 
     private void OpenFileInVsCode(string relativePath)

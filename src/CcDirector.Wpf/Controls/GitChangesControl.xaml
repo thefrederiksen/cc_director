@@ -21,8 +21,10 @@
                     <ContextMenu>
                         <MenuItem Header="Open in VS Code"
                                   Click="FileNode_OpenInVsCode_Click" />
+                        <MenuItem Header="Copy Path"
+                                  Click="FileNode_CopyFullPath_Click" />
                         <MenuItem Header="Copy Relative Path"
-                                  Click="FileNode_CopyPath_Click" />
+                                  Click="FileNode_CopyRelativePath_Click" />
                     </ContextMenu>
                 </Border.ContextMenu>
                 <DockPanel>

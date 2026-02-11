@@ -26,17 +26,30 @@ public sealed class SessionManager : IDisposable
     /// <summary>Create a new ConPty session that spawns claude.exe in the given repo path.</summary>
     public Session CreateSession(string repoPath, string? claudeArgs = null)
     {
-        return CreateSession(repoPath, claudeArgs, SessionBackendType.ConPty);
+        return CreateSession(repoPath, claudeArgs, SessionBackendType.ConPty, resumeSessionId: null);
     }
 
     /// <summary>Create a new session with the specified backend type.</summary>
     public Session CreateSession(string repoPath, string? claudeArgs, SessionBackendType backendType)
+    {
+        return CreateSession(repoPath, claudeArgs, backendType, resumeSessionId: null);
+    }
+
+    /// <summary>Create a session, optionally resuming a previous Claude session.</summary>
+    public Session CreateSession(string repoPath, string? claudeArgs, SessionBackendType backendType, string? resumeSessionId)
     {
         if (!Directory.Exists(repoPath))
             throw new DirectoryNotFoundException($"Repository path not found: {repoPath}");
 
         var id = Guid.NewGuid();
         string args = claudeArgs ?? _options.DefaultClaudeArgs ?? string.Empty;
+
+        // Add --resume flag if resuming a previous session
+        if (!string.IsNullOrEmpty(resumeSessionId))
+        {
+            args = $"{args} --resume {resumeSessionId}".Trim();
+            _log?.Invoke($"Resuming Claude session {resumeSessionId}");
+        }
 
         ISessionBackend backend = backendType switch
         {
@@ -56,7 +69,8 @@ public sealed class SessionManager : IDisposable
             session.MarkRunning();
 
             _sessions[id] = session;
-            _log?.Invoke($"Session {id} created for repo {repoPath} (PID {backend.ProcessId}, Backend={backendType}).");
+            var resumeInfo = !string.IsNullOrEmpty(resumeSessionId) ? $", Resume={resumeSessionId[..8]}..." : "";
+            _log?.Invoke($"Session {id} created for repo {repoPath} (PID {backend.ProcessId}, Backend={backendType}{resumeInfo}).");
 
             return session;
         }
@@ -187,12 +201,21 @@ public sealed class SessionManager : IDisposable
         }
     }
 
+    /// <summary>Fires when a Claude session is registered to a Director session.</summary>
+    public event Action<Session, string>? OnClaudeSessionRegistered;
+
     /// <summary>Register a Claude session_id -> Director session mapping.</summary>
     public void RegisterClaudeSession(string claudeSessionId, Guid directorSessionId)
     {
         _claudeSessionMap[claudeSessionId] = directorSessionId;
         if (_sessions.TryGetValue(directorSessionId, out var session))
+        {
             session.ClaudeSessionId = claudeSessionId;
+            // Refresh Claude metadata now that we have the session ID
+            session.RefreshClaudeMetadata();
+            // Notify listeners
+            OnClaudeSessionRegistered?.Invoke(session, claudeSessionId);
+        }
         _log?.Invoke($"Registered Claude session {claudeSessionId} -> Director session {directorSessionId}.");
     }
 

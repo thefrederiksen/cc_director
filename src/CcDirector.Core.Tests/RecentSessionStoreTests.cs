@@ -122,6 +122,57 @@ public class RecentSessionStoreTests : IDisposable
         Assert.Equal("Persisted", recent[0].CustomName);
     }
 
+    [Fact]
+    public void UpdateClaudeSessionId_UpdatesExistingEntry()
+    {
+        var store = new RecentSessionStore(_filePath);
+        store.Load();
+        store.Add(_tempDir, "TestSession");
+
+        // Initially no ClaudeSessionId
+        Assert.Null(store.GetRecent()[0].ClaudeSessionId);
+
+        // Update with a Claude session ID
+        store.UpdateClaudeSessionId(_tempDir, "TestSession", "abc123-session-id");
+
+        var recent = store.GetRecent();
+        Assert.Single(recent);
+        Assert.Equal("abc123-session-id", recent[0].ClaudeSessionId);
+    }
+
+    [Fact]
+    public void UpdateClaudeSessionId_PersistsToDisk()
+    {
+        var store1 = new RecentSessionStore(_filePath);
+        store1.Load();
+        store1.Add(_tempDir, "TestSession");
+        store1.UpdateClaudeSessionId(_tempDir, "TestSession", "persisted-session-id");
+
+        // Load in a new instance
+        var store2 = new RecentSessionStore(_filePath);
+        store2.Load();
+
+        var recent = store2.GetRecent();
+        Assert.Single(recent);
+        Assert.Equal("persisted-session-id", recent[0].ClaudeSessionId);
+    }
+
+    [Fact]
+    public void UpdateClaudeSessionId_NoOpForNonExistentEntry()
+    {
+        var store = new RecentSessionStore(_filePath);
+        store.Load();
+        store.Add(_tempDir, "ExistingSession");
+
+        // Try to update a non-existent session - should not throw
+        store.UpdateClaudeSessionId(_tempDir, "NonExistent", "some-id");
+
+        // Original entry should be unchanged
+        var recent = store.GetRecent();
+        Assert.Single(recent);
+        Assert.Null(recent[0].ClaudeSessionId);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_tempDir, recursive: true); }

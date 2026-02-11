@@ -1,4 +1,5 @@
 using CcDirector.Core.Backends;
+using CcDirector.Core.Claude;
 using CcDirector.Core.Memory;
 using CcDirector.Core.Pipes;
 
@@ -42,6 +43,12 @@ public sealed class Session : IDisposable
 
     /// <summary>The session_id reported by Claude hooks, used for routing.</summary>
     public string? ClaudeSessionId { get; internal set; }
+
+    /// <summary>Cached metadata from Claude's sessions-index.json.</summary>
+    public ClaudeSessionMetadata? ClaudeMetadata { get; private set; }
+
+    /// <summary>Fires when ClaudeMetadata is refreshed.</summary>
+    public event Action<ClaudeSessionMetadata?>? OnClaudeMetadataChanged;
 
     /// <summary>User-defined display name for this session. Null means use default (repo folder name).</summary>
     public string? CustomName { get; set; }
@@ -186,6 +193,27 @@ public sealed class Session : IDisposable
         if (old == newState) return;
         ActivityState = newState;
         OnActivityStateChanged?.Invoke(old, newState);
+    }
+
+    /// <summary>
+    /// Refresh Claude session metadata from sessions-index.json.
+    /// Call this after ClaudeSessionId is set or periodically to update message counts.
+    /// </summary>
+    public void RefreshClaudeMetadata()
+    {
+        if (string.IsNullOrEmpty(ClaudeSessionId))
+        {
+            if (ClaudeMetadata != null)
+            {
+                ClaudeMetadata = null;
+                OnClaudeMetadataChanged?.Invoke(null);
+            }
+            return;
+        }
+
+        var metadata = ClaudeSessionReader.ReadSessionMetadata(ClaudeSessionId, RepoPath);
+        ClaudeMetadata = metadata;
+        OnClaudeMetadataChanged?.Invoke(metadata);
     }
 
     /// <summary>Resize the terminal (only meaningful for ConPty backend).</summary>

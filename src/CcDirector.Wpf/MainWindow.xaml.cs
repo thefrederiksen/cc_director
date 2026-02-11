@@ -10,6 +10,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using CcDirector.Core.Backends;
+using CcDirector.Core.Claude;
 using CcDirector.Core.Configuration;
 using CcDirector.Core.Git;
 using CcDirector.Core.Pipes;
@@ -143,6 +144,9 @@ public partial class MainWindow : Window
         if (app.EventRouter != null)
             app.EventRouter.OnRawMessage += OnPipeMessageReceived;
 
+        // Subscribe to session registration for ClaudeSessionId persistence
+        _sessionManager.OnClaudeSessionRegistered += OnClaudeSessionRegistered;
+
         // v2 uses ConPTY only - no session restoration from embedded mode
     }
 
@@ -150,53 +154,33 @@ public partial class MainWindow : Window
     {
         var app = (App)Application.Current;
         var registry = app.RepositoryRegistry;
-        var recentStore = app.RecentSessionStore;
 
-        var dialog = new NewSessionDialog(registry, recentStore);
+        var dialog = new NewSessionDialog(registry);
         dialog.Owner = this;
         if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.SelectedPath))
         {
-            if (!string.IsNullOrWhiteSpace(dialog.SelectedCustomName))
-            {
-                // Check if session with same name is already open
-                var existing = _sessions.FirstOrDefault(s =>
-                    string.Equals(s.Session.CustomName, dialog.SelectedCustomName, StringComparison.Ordinal));
+            var resumeSessionId = dialog.SelectedResumeSessionId;
 
-                if (existing != null)
-                {
-                    // Switch to existing session, update recent timestamp
-                    SessionList.SelectedItem = existing;
-                    recentStore.Add(dialog.SelectedPath, dialog.SelectedCustomName, existing.Session.CustomColor);
-                    return;
-                }
+            // Create the session (with optional resume)
+            var vm = CreateSession(dialog.SelectedPath, resumeSessionId);
+            if (vm == null) return;
 
-                // No duplicate — create new session with the recent name
-                // Look up color from the recent entry
-                var recentColor = LookupRecentColor(dialog.SelectedPath, dialog.SelectedCustomName, recentStore.GetRecent());
-                var vm = CreateSession(dialog.SelectedPath);
-                if (vm == null) return;
-                vm.Rename(dialog.SelectedCustomName, recentColor);
-                PersistSessionState();
-                recentStore.Add(dialog.SelectedPath, dialog.SelectedCustomName, recentColor);
-            }
-            else
+            // Show rename dialog for new sessions (not resume)
+            if (string.IsNullOrEmpty(resumeSessionId))
             {
-                // New repo selection — open rename dialog immediately
-                var vm = CreateSession(dialog.SelectedPath);
-                if (vm == null) return;
                 ShowRenameDialog(vm);
-                if (!string.IsNullOrWhiteSpace(vm.Session.CustomName))
-                    recentStore.Add(dialog.SelectedPath, vm.Session.CustomName, vm.Session.CustomColor);
             }
+
+            PersistSessionState();
         }
     }
 
-    private SessionViewModel? CreateSession(string repoPath)
+    private SessionViewModel? CreateSession(string repoPath, string? resumeSessionId = null)
     {
         try
         {
             // Create session with ConPty backend (default mode)
-            var session = _sessionManager.CreateSession(repoPath, null, SessionBackendType.ConPty);
+            var session = _sessionManager.CreateSession(repoPath, null, SessionBackendType.ConPty, resumeSessionId);
             var vm = new SessionViewModel(session, Dispatcher);
             _sessions.Add(vm);
             SessionList.SelectedItem = vm;
@@ -400,8 +384,37 @@ public partial class MainWindow : Window
         HeaderSessionName.Text = vm.DisplayName;
         SessionHeaderBanner.Background = vm.CustomColorBrush;
         UpdateHeaderActivityState(vm);
+        UpdateHeaderClaudeMetadata(vm);
         SessionHeaderBanner.Visibility = Visibility.Visible;
         DeferConsolePositionUpdate();
+    }
+
+    private void UpdateHeaderClaudeMetadata(SessionViewModel vm)
+    {
+        if (vm.HasClaudeMetadata)
+        {
+            HeaderMessageCountBadge.Visibility = Visibility.Visible;
+            HeaderMessageCountText.Text = vm.ClaudeMessageCount.ToString();
+
+            var summary = vm.ClaudeSummary ?? vm.ClaudeFirstPrompt;
+            if (!string.IsNullOrWhiteSpace(summary))
+            {
+                // Truncate if too long
+                if (summary.Length > 80)
+                    summary = summary[..80] + "...";
+                HeaderClaudeSummary.Text = summary;
+                HeaderClaudeSummary.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                HeaderClaudeSummary.Visibility = Visibility.Collapsed;
+            }
+        }
+        else
+        {
+            HeaderMessageCountBadge.Visibility = Visibility.Collapsed;
+            HeaderClaudeSummary.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void UpdateHeaderActivityState(SessionViewModel vm)
@@ -445,6 +458,13 @@ public partial class MainWindow : Window
         {
             SessionHeaderBanner.Background = vm.CustomColorBrush;
             UpdateHeaderActivityState(vm);
+        }
+        else if (e.PropertyName is nameof(SessionViewModel.HasClaudeMetadata)
+                 or nameof(SessionViewModel.ClaudeMessageCount)
+                 or nameof(SessionViewModel.ClaudeSummary)
+                 or nameof(SessionViewModel.ClaudeInfoText))
+        {
+            UpdateHeaderClaudeMetadata(vm);
         }
     }
 
@@ -679,20 +699,24 @@ public partial class MainWindow : Window
             // Auto-scroll to bottom
             if (_pipeMessages.Count > 0)
                 PipeMessageList.ScrollIntoView(_pipeMessages[^1]);
+
+            // Refresh Claude metadata on Stop events (end of turn - metadata may have updated)
+            if (msg.HookEventName == "Stop" && !string.IsNullOrEmpty(msg.SessionId))
+            {
+                var session = _sessionManager.GetSessionByClaudeId(msg.SessionId);
+                if (session != null)
+                {
+                    var sessionVm = _sessions.FirstOrDefault(s => s.Session.Id == session.Id);
+                    sessionVm?.RefreshClaudeMetadata();
+                }
+            }
         });
     }
 
-    private static string? LookupRecentColor(string repoPath, string? customName, IReadOnlyList<RecentSession> recentSessions)
+    private void OnClaudeSessionRegistered(Session session, string claudeSessionId)
     {
-        if (repoPath == "Unknown" || recentSessions.Count == 0)
-            return null;
-
-        var normalized = System.IO.Path.GetFullPath(repoPath).TrimEnd('\\', '/');
-        var match = recentSessions.FirstOrDefault(r =>
-            string.Equals(System.IO.Path.GetFullPath(r.RepoPath).TrimEnd('\\', '/'), normalized, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(r.CustomName, customName, StringComparison.Ordinal));
-
-        return match?.CustomColor;
+        // Log the registration - actual session data is stored by Claude Code itself
+        FileLog.Write($"[MainWindow] Claude session registered: {claudeSessionId} for {session.RepoPath}");
     }
 
     private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)
@@ -959,11 +983,7 @@ public partial class MainWindow : Window
         if (vm == null) return;
 
         ShowRenameDialog(vm);
-        if (!string.IsNullOrWhiteSpace(vm.Session.CustomName))
-        {
-            var app = (App)Application.Current;
-            app.RecentSessionStore.Add(repo.Path, vm.Session.CustomName, vm.Session.CustomColor);
-        }
+        PersistSessionState();
 
         // Switch to Terminal tab to show the new session
         SessionTabs.SelectedIndex = 0;
@@ -1208,6 +1228,7 @@ public class SessionViewModel : INotifyPropertyChanged
         Session = session;
         _dispatcher = dispatcher;
         session.OnActivityStateChanged += OnActivityStateChanged;
+        session.OnClaudeMetadataChanged += OnClaudeMetadataChanged;
     }
 
     private static readonly SolidColorBrush DefaultHeaderBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x25, 0x25, 0x26)));
@@ -1260,6 +1281,48 @@ public class SessionViewModel : INotifyPropertyChanged
     public string StatusText => $"{Session.ActivityState} (PID {Session.ProcessId}) - ConPTY";
     public SolidColorBrush ActivityBrush => ActivityBrushes.GetValueOrDefault(Session.ActivityState, ActivityBrushes[ActivityState.Starting]);
 
+    /// <summary>Claude session summary (from sessions-index.json).</summary>
+    public string? ClaudeSummary => Session.ClaudeMetadata?.Summary;
+
+    /// <summary>Claude session message count.</summary>
+    public int ClaudeMessageCount => Session.ClaudeMetadata?.MessageCount ?? 0;
+
+    /// <summary>Claude session first prompt (truncated).</summary>
+    public string? ClaudeFirstPrompt => Session.ClaudeMetadata?.FirstPrompt;
+
+    /// <summary>Short display text for Claude info: summary or first prompt snippet.</summary>
+    public string ClaudeInfoText
+    {
+        get
+        {
+            var meta = Session.ClaudeMetadata;
+            if (meta == null) return string.Empty;
+
+            // Prefer summary, fall back to first prompt
+            var text = !string.IsNullOrWhiteSpace(meta.Summary)
+                ? meta.Summary
+                : meta.FirstPrompt;
+
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+
+            // Truncate if too long
+            const int maxLen = 60;
+            if (text.Length > maxLen)
+                text = text[..maxLen] + "...";
+
+            return text;
+        }
+    }
+
+    /// <summary>Whether Claude metadata is available.</summary>
+    public bool HasClaudeMetadata => Session.ClaudeMetadata != null;
+
+    /// <summary>Refresh Claude metadata from sessions-index.json.</summary>
+    public void RefreshClaudeMetadata()
+    {
+        Session.RefreshClaudeMetadata();
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnActivityStateChanged(ActivityState oldState, ActivityState newState)
@@ -1268,6 +1331,18 @@ public class SessionViewModel : INotifyPropertyChanged
         {
             OnPropertyChanged(nameof(StatusText));
             OnPropertyChanged(nameof(ActivityBrush));
+        });
+    }
+
+    private void OnClaudeMetadataChanged(ClaudeSessionMetadata? metadata)
+    {
+        _dispatcher.BeginInvoke(() =>
+        {
+            OnPropertyChanged(nameof(ClaudeSummary));
+            OnPropertyChanged(nameof(ClaudeMessageCount));
+            OnPropertyChanged(nameof(ClaudeFirstPrompt));
+            OnPropertyChanged(nameof(ClaudeInfoText));
+            OnPropertyChanged(nameof(HasClaudeMetadata));
         });
     }
 

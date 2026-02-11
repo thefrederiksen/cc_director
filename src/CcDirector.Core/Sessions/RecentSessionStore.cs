@@ -8,6 +8,7 @@ public class RecentSession
     public string? CustomName { get; set; }
     public string? CustomColor { get; set; }
     public DateTime LastUsed { get; set; }
+    public string? ClaudeSessionId { get; set; }
 }
 
 public class RecentSessionStore
@@ -85,6 +86,23 @@ public class RecentSessionStore
     }
 
     public IReadOnlyList<RecentSession> GetRecent() => _entries.AsReadOnly();
+
+    /// <summary>
+    /// Update the ClaudeSessionId for an existing recent session entry.
+    /// </summary>
+    public void UpdateClaudeSessionId(string repoPath, string? customName, string claudeSessionId)
+    {
+        var normalized = Path.GetFullPath(repoPath).TrimEnd('\\', '/');
+        var entry = _entries.FirstOrDefault(e =>
+            string.Equals(Path.GetFullPath(e.RepoPath).TrimEnd('\\', '/'), normalized, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(e.CustomName, customName, StringComparison.Ordinal));
+
+        if (entry != null)
+        {
+            entry.ClaudeSessionId = claudeSessionId;
+            Save();
+        }
+    }
 
     private void Save()
     {
