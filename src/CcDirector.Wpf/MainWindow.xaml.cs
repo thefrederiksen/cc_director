@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private const int MaxPipeMessages = 500;
 
     private bool _pipeMessagesExpanded;
+    private bool _updatingScrollBar;
     private SessionManager _sessionManager = null!;
     private TerminalControl? _terminalControl;
     private EmbeddedBackend? _activeEmbeddedBackend;
@@ -310,7 +311,9 @@ public partial class MainWindow : Window
         {
             _terminalControl = new TerminalControl();
             TerminalArea.Child = _terminalControl;
+            _terminalControl.ScrollChanged += OnTerminalScrollChanged;
             _terminalControl.Attach(session);
+            UpdateScrollBar();
         }
 
         // Show session header banner
@@ -328,6 +331,7 @@ public partial class MainWindow : Window
         _activeSession = null;
         if (_terminalControl != null)
         {
+            _terminalControl.ScrollChanged -= OnTerminalScrollChanged;
             _terminalControl.Detach();
             _terminalControl = null;
         }
@@ -335,12 +339,52 @@ public partial class MainWindow : Window
         _activeEmbeddedBackend = null;
         TerminalArea.Child = null;
 
+        // Reset scrollbar
+        TerminalScrollBar.Visibility = Visibility.Collapsed;
+
         // Hide session header banner
         UpdateSessionHeader();
 
         GitChanges.Detach();
         SessionTabs.Visibility = Visibility.Collapsed;
         PlaceholderText.Visibility = Visibility.Visible;
+    }
+
+    private void TerminalScrollBar_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_terminalControl == null || _updatingScrollBar) return;
+
+        _updatingScrollBar = true;
+        int offset = (int)(TerminalScrollBar.Maximum - TerminalScrollBar.Value);
+        _terminalControl.ScrollOffset = offset;
+        _updatingScrollBar = false;
+    }
+
+    private void OnTerminalScrollChanged(object? sender, EventArgs e)
+    {
+        UpdateScrollBar();
+    }
+
+    private void UpdateScrollBar()
+    {
+        if (_terminalControl == null)
+        {
+            TerminalScrollBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        _updatingScrollBar = true;
+        int total = _terminalControl.ScrollbackCount;
+        int viewport = _terminalControl.ViewportRows;
+
+        TerminalScrollBar.Maximum = total;
+        TerminalScrollBar.ViewportSize = viewport;
+        TerminalScrollBar.LargeChange = viewport;
+        TerminalScrollBar.SmallChange = 3;
+        TerminalScrollBar.Value = total - _terminalControl.ScrollOffset;
+
+        TerminalScrollBar.Visibility = total > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _updatingScrollBar = false;
     }
 
     private static readonly Dictionary<ActivityState, string> ActivityLabels = new()

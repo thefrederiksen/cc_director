@@ -33,6 +33,31 @@ public class TerminalControl : FrameworkElement
     private readonly List<TerminalCell[]> _scrollback = new();
     private int _scrollOffset; // 0 = bottom (current view), >0 = scrolled up
 
+    /// <summary>Raised when scroll position or scrollback changes.</summary>
+    public event EventHandler? ScrollChanged;
+
+    /// <summary>Number of lines scrolled up from bottom. 0 = current view.</summary>
+    public int ScrollOffset
+    {
+        get => _scrollOffset;
+        set
+        {
+            int clamped = Math.Max(0, Math.Min(_scrollback.Count, value));
+            if (_scrollOffset != clamped)
+            {
+                _scrollOffset = clamped;
+                InvalidateVisual();
+                ScrollChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+    }
+
+    /// <summary>Total number of lines in scrollback buffer.</summary>
+    public int ScrollbackCount => _scrollback.Count;
+
+    /// <summary>Number of visible rows in the viewport.</summary>
+    public int ViewportRows => _rows;
+
     // Font metrics
     private double _cellWidth;
     private double _cellHeight;
@@ -111,6 +136,7 @@ public class TerminalControl : FrameworkElement
                 _scrollOffset = 0;
 
             InvalidateVisual();
+            ScrollChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -233,6 +259,7 @@ public class TerminalControl : FrameworkElement
             _parser?.UpdateGrid(_cells, _cols, _rows);
             _session?.Resize((short)_cols, (short)_rows);
             InvalidateVisual();
+            ScrollChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -267,8 +294,7 @@ public class TerminalControl : FrameworkElement
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         int lines = e.Delta > 0 ? 3 : -3;
-        _scrollOffset = Math.Max(0, Math.Min(_scrollback.Count, _scrollOffset + lines));
-        InvalidateVisual();
+        ScrollOffset = _scrollOffset + lines; // Uses property to trigger event
         e.Handled = true;
     }
 

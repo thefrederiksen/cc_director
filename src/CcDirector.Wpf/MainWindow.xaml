@@ -274,7 +274,18 @@
                     </TabControl.Resources>
 
                     <TabItem Header="Terminal">
-                        <Border x:Name="TerminalArea" Background="#1E1E1E" />
+                        <Grid Background="#1E1E1E">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="TerminalArea" Grid.Column="0" Background="#1E1E1E" />
+                            <ScrollBar x:Name="TerminalScrollBar" Grid.Column="1"
+                                       Orientation="Vertical"
+                                       Visibility="Collapsed"
+                                       Style="{StaticResource TerminalScrollBarStyle}"
+                                       ValueChanged="TerminalScrollBar_ValueChanged" />
+                        </Grid>
                     </TabItem>
                     <TabItem Header="Source Control">
                         <controls:GitChangesControl x:Name="GitChanges" />

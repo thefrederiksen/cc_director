@@ -10,5 +10,63 @@
         <SolidColorBrush x:Key="TextForeground" Color="#CCCCCC" />
         <SolidColorBrush x:Key="AccentBrush" Color="#007ACC" />
         <SolidColorBrush x:Key="SelectedItemBrush" Color="#094771" />
+
+        <!-- Terminal Scrollbar Styles -->
+        <Style x:Key="ScrollBarPageButton" TargetType="RepeatButton">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TerminalScrollThumb" TargetType="Thumb">
+            <Setter Property="Background" Value="#5A5A5A" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="2" Margin="3,0" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#888888" />
+                </Trigger>
+                <Trigger Property="IsDragging" Value="True">
+                    <Setter Property="Background" Value="#AAAAAA" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="TerminalScrollBarStyle" TargetType="ScrollBar">
+            <Setter Property="Background" Value="#1E1E1E" />
+            <Setter Property="Width" Value="14" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="{TemplateBinding Background}">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand"
+                                                  Style="{StaticResource ScrollBarPageButton}" />
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource TerminalScrollThumb}" />
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand"
+                                                  Style="{StaticResource ScrollBarPageButton}" />
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Application.Resources>
 </Application>
