@@ -91,6 +91,19 @@ public partial class MainWindow : Window
     {
         var app = (App)Application.Current;
 
+        // In sandbox mode, skip exit dialog and just kill all sessions
+        if (app.SandboxMode)
+        {
+            FileLog.Write("[MainWindow] Sandbox mode: closing without dialog");
+            DetachTerminal();
+            foreach (var vm in _sessions)
+            {
+                _ = vm.Session.KillAsync();
+            }
+            base.OnClosing(e);
+            return;
+        }
+
         // Check for active running sessions
         var activeSessions = _sessions
             .Where(vm => vm.Session.Status is SessionStatus.Running or SessionStatus.Starting)
@@ -756,17 +769,18 @@ public partial class MainWindow : Window
         {
             // Send keystrokes directly to the embedded console window
             await _activeEmbeddedBackend.SendTextAsync(text);
-            ScheduleEnterRetry(_activeSession, _activeEmbeddedBackend);
+            ScheduleEnterRetry(_activeSession);
         }
         else
         {
             await _activeSession.SendTextAsync(text);
+            ScheduleEnterRetry(_activeSession);
         }
 
         PromptInput.Focus();
     }
 
-    private void ScheduleEnterRetry(Session session, EmbeddedBackend backend)
+    private void ScheduleEnterRetry(Session session)
     {
         _enterRetryCts?.Cancel();
         _enterRetryCts = new CancellationTokenSource();
@@ -782,19 +796,18 @@ public partial class MainWindow : Window
         }
 
         session.OnActivityStateChanged += OnStateChanged;
-        _ = RetryEnterAfterDelay(session, backend, cts, OnStateChanged);
+        _ = RetryEnterAfterDelay(session, cts, OnStateChanged);
     }
 
     private async Task RetryEnterAfterDelay(
         Session session,
-        EmbeddedBackend backend,
         CancellationTokenSource cts,
         Action<ActivityState, ActivityState> handler)
     {
         try
         {
             await Task.Delay(3000, cts.Token);
-            await backend.SendEnterAsync();
+            await session.SendEnterAsync();
             FileLog.Write("[MainWindow] Enter retry: sent extra Enter (no UserPromptSubmit within 3s)");
         }
         catch (TaskCanceledException) { /* UserPromptSubmit arrived - no retry needed */ }
@@ -806,9 +819,16 @@ public partial class MainWindow : Window
 
     private void PersistSessionState()
     {
+        var app = (App)Application.Current;
+
+        // In sandbox mode, don't persist session state
+        if (app.SandboxMode)
+        {
+            return;
+        }
+
         try
         {
-            var app = (App)Application.Current;
             _sessionManager.SaveCurrentState(app.SessionStateStore);
         }
         catch (Exception ex)

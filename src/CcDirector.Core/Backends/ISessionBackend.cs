@@ -53,6 +53,12 @@ public interface ISessionBackend : IDisposable
     Task SendTextAsync(string text);
 
     /// <summary>
+    /// Send just an Enter keystroke to the process.
+    /// Used by the Enter retry mechanism when the initial Enter doesn't register.
+    /// </summary>
+    Task SendEnterAsync() => Task.CompletedTask;
+
+    /// <summary>
     /// Resize the terminal. Only meaningful for ConPty backend.
     /// </summary>
     void Resize(short cols, short rows);

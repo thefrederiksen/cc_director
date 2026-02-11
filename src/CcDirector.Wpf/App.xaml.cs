@@ -24,6 +24,12 @@ public partial class App : Application
     public NulFileWatcher NulFileWatcher { get; private set; } = null!;
 
     /// <summary>
+    /// When true, sessions are not loaded or saved, and no exit dialog is shown.
+    /// Activated via --sandbox command-line flag for isolated testing.
+    /// </summary>
+    public bool SandboxMode { get; private set; }
+
+    /// <summary>
     /// Persisted session data loaded on startup, consumed by MainWindow for HWND reattach.
     /// Cleared after MainWindow processes it.
     /// </summary>
@@ -41,6 +47,9 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // Parse command-line arguments
+        SandboxMode = e.Args.Contains("--sandbox", StringComparer.OrdinalIgnoreCase);
 
         // Single-instance enforcement (disabled for testing)
         // _singleInstanceMutex = new Mutex(true, @"Global\CcDirector_SingleInstance", out bool createdNew);
@@ -66,14 +75,18 @@ public partial class App : Application
 
         FileLog.Start();
         Action<string> log = msg => FileLog.Write($"[CcDirector] {msg}");
-        log($"CC Director starting, log file: {FileLog.CurrentLogPath}");
+        log($"CC Director starting (SandboxMode={SandboxMode}), log file: {FileLog.CurrentLogPath}");
 
         SessionManager = new SessionManager(Options, log);
         SessionManager.ScanForOrphans();
 
         // Load persisted session data (validates PIDs and re-saves only live sessions).
         // Actual session restoration happens in MainWindow.RestorePersistedSessions.
-        RestoredPersistedData = SessionManager.LoadPersistedSessions(SessionStateStore);
+        // In sandbox mode, skip loading persisted sessions entirely.
+        if (!SandboxMode)
+        {
+            RestoredPersistedData = SessionManager.LoadPersistedSessions(SessionStateStore);
+        }
 
         // Start pipe server and event router
         PipeServer = new DirectorPipeServer(log);

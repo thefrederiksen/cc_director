@@ -147,6 +147,13 @@ public sealed class Session : IDisposable
         _ = SendTextAsync(text);
     }
 
+    /// <summary>Send just an Enter keystroke to the backend.</summary>
+    public async Task SendEnterAsync()
+    {
+        if (_disposed || Status is SessionStatus.Exited or SessionStatus.Failed) return;
+        await _backend.SendEnterAsync();
+    }
+
     /// <summary>Process a hook event and transition activity state accordingly.</summary>
     public void HandlePipeEvent(PipeMessage msg)
     {

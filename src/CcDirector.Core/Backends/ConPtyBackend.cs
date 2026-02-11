@@ -80,6 +80,13 @@ public sealed class ConPtyBackend : ISessionBackend
         _processHost.Write(new byte[] { 0x0D });
     }
 
+    public Task SendEnterAsync()
+    {
+        if (_disposed || _processHost == null) return Task.CompletedTask;
+        _processHost.Write(new byte[] { 0x0D });
+        return Task.CompletedTask;
+    }
+
     public void Resize(short cols, short rows)
     {
         if (_disposed || _console == null) return;
