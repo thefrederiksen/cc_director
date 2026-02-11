@@ -161,8 +161,45 @@ public partial class MainWindow : Window
         // Subscribe to session registration for ClaudeSessionId persistence
         _sessionManager.OnClaudeSessionRegistered += OnClaudeSessionRegistered;
 
+        // Set build info from assembly
+        SetBuildInfo();
+
         // Restore sessions from previous run (crash recovery)
         RestorePersistedSessions();
+    }
+
+    private void SetBuildInfo()
+    {
+        try
+        {
+            // Get the exe path for single-file apps
+            var exePath = System.IO.Path.Combine(AppContext.BaseDirectory, "cc_director.exe");
+            if (System.IO.File.Exists(exePath))
+            {
+                var buildTime = System.IO.File.GetLastWriteTime(exePath);
+                BuildInfoText.Text = $"Build: {buildTime:HH:mm:ss}";
+                BuildInfoText.ToolTip = $"Built: {buildTime:yyyy-MM-dd HH:mm:ss}\nPath: {exePath}";
+            }
+            else
+            {
+                // Fallback to dll
+                var dllPath = System.IO.Path.Combine(AppContext.BaseDirectory, "cc_director.dll");
+                if (System.IO.File.Exists(dllPath))
+                {
+                    var buildTime = System.IO.File.GetLastWriteTime(dllPath);
+                    BuildInfoText.Text = $"Build: {buildTime:HH:mm:ss}";
+                    BuildInfoText.ToolTip = $"Built: {buildTime:yyyy-MM-dd HH:mm:ss}\nPath: {dllPath}";
+                }
+                else
+                {
+                    BuildInfoText.Text = $"Build: {DateTime.Now:HH:mm:ss}";
+                }
+            }
+        }
+        catch
+        {
+            BuildInfoText.Text = "Build: unknown";
+        }
     }
 
     /// <summary>

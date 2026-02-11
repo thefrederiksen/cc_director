@@ -8,6 +8,17 @@ This is **enterprise-level software** requiring robust error handling, comprehen
 
 ## Critical Rules
 
+### 0. NEVER KILL RUNNING PROCESSES WITHOUT PERMISSION
+
+**ABSOLUTELY NEVER use taskkill or any command to terminate cc_director.exe or any other running application without explicit user approval.**
+
+The user runs multiple instances of cc_director simultaneously. Killing processes to "fix" build errors is NOT acceptable. If a build fails due to locked files:
+- Tell the user the build failed because files are locked
+- Ask the user if they want to close the application themselves
+- NEVER automatically kill processes
+
+This rule has NO exceptions.
+
 ### 1. Responsive UI - MANDATORY
 
 **Every user action MUST provide immediate visual feedback (<100ms).**

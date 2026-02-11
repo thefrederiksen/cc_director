@@ -44,6 +44,12 @@
                                 BorderThickness="0"
                                 Cursor="Hand"
                                 ToolTip="Open log directory in Explorer" />
+                        <TextBlock x:Name="BuildInfoText"
+                                   Text="Build: ---"
+                                   Foreground="#555555"
+                                   FontSize="9"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,4,0,0" />
                     </StackPanel>
 
                     <ListBox x:Name="SessionList"
