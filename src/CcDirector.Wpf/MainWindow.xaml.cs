@@ -991,72 +991,27 @@ public partial class MainWindow : Window
             return;
         }
 
+        FileLog.Write($"[MainWindow] MenuGitHubIssues_Click: {vm.Session.RepoPath}");
+
         try
         {
+            // Use gh CLI to open issues page in browser
             var psi = new ProcessStartInfo
             {
-                FileName = "git",
-                Arguments = "remote get-url origin",
+                FileName = "gh",
+                Arguments = "issue list --web",
                 WorkingDirectory = vm.Session.RepoPath,
-                RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
 
-            using var proc = Process.Start(psi);
-            if (proc is null)
-            {
-                FileLog.Write("[MainWindow] MenuGitHubIssues_Click: Failed to start git");
-                return;
-            }
-
-            string remoteUrl = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit();
-
-            if (proc.ExitCode != 0 || string.IsNullOrEmpty(remoteUrl))
-            {
-                FileLog.Write("[MainWindow] MenuGitHubIssues_Click: No origin remote found");
-                return;
-            }
-
-            // Convert remote URL to GitHub issues URL
-            string? issuesUrl = ConvertToGitHubIssuesUrl(remoteUrl);
-            if (issuesUrl is null)
-            {
-                FileLog.Write($"[MainWindow] MenuGitHubIssues_Click: Could not parse remote URL: {remoteUrl}");
-                return;
-            }
-
-            FileLog.Write($"[MainWindow] MenuGitHubIssues_Click: Opening {issuesUrl}");
-            Process.Start(new ProcessStartInfo(issuesUrl) { UseShellExecute = true });
+            Process.Start(psi);
+            FileLog.Write("[MainWindow] MenuGitHubIssues_Click: Started gh browse");
         }
         catch (Exception ex)
         {
             FileLog.Write($"[MainWindow] MenuGitHubIssues_Click FAILED: {ex.Message}");
         }
-    }
-
-    private static string? ConvertToGitHubIssuesUrl(string remoteUrl)
-    {
-        // Handle SSH format: git@github.com:user/repo.git
-        if (remoteUrl.StartsWith("git@github.com:"))
-        {
-            string path = remoteUrl.Substring("git@github.com:".Length);
-            if (path.EndsWith(".git"))
-                path = path.Substring(0, path.Length - 4);
-            return $"https://github.com/{path}/issues";
-        }
-
-        // Handle HTTPS format: https://github.com/user/repo.git
-        if (remoteUrl.StartsWith("https://github.com/"))
-        {
-            string path = remoteUrl.Substring("https://github.com/".Length);
-            if (path.EndsWith(".git"))
-                path = path.Substring(0, path.Length - 4);
-            return $"https://github.com/{path}/issues";
-        }
-
-        return null;
     }
 
     private void SessionMenuButton_Click(object sender, RoutedEventArgs e)
