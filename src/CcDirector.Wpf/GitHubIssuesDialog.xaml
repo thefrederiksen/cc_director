@@ -1,0 +1,30 @@
+<Window x:Class="CcDirector.Wpf.GitHubIssuesDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="GitHub Issues"
+        Width="500" Height="140"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="#1E1E1E">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="16" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBox x:Name="UrlTextBox"
+                 Grid.Row="0"
+                 IsReadOnly="True"
+                 FontSize="14"
+                 Padding="8"
+                 Background="#2D2D2D"
+                 Foreground="#6CB6FF"
+                 BorderBrush="#3D3D3D" />
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="CopyButton" Content="Copy URL" Width="100" Height="32" Margin="0,0,8,0" Click="CopyButton_Click" />
+            <Button x:Name="OpenButton" Content="Open in Browser" Width="120" Height="32" Click="OpenButton_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

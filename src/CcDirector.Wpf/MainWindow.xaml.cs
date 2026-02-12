@@ -1032,10 +1032,11 @@ public partial class MainWindow : Window
         if (ownerRepo.EndsWith(".git"))
             ownerRepo = ownerRepo.Substring(0, ownerRepo.Length - 4);
 
-        // Open in browser
+        // Show dialog with URL
         string issuesUrl = $"https://github.com/{ownerRepo}/issues";
-        FileLog.Write($"[MainWindow] MenuGitHubIssues_Click: Opening {issuesUrl}");
-        Process.Start(new ProcessStartInfo(issuesUrl) { UseShellExecute = true });
+        FileLog.Write($"[MainWindow] MenuGitHubIssues_Click: {issuesUrl}");
+        var dialog = new GitHubIssuesDialog(issuesUrl) { Owner = this };
+        dialog.ShowDialog();
     }
 
     private void SessionMenuButton_Click(object sender, RoutedEventArgs e)
