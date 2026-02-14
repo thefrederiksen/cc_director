@@ -1,8 +1,12 @@
-# CC Director Coding Style Guide
+# Coding Style Guide
+
+> **Current language scope:** C# / .NET / WPF
 
 This document defines the coding standards for CC Director. This is **enterprise-level software** that requires robust error handling, comprehensive logging, thorough testing, and responsive UI patterns.
 
-## Core Philosophy
+---
+
+## 0. Development Philosophy
 
 1. **Enterprise Quality** - This is production software, not a prototype
 2. **Fail Fast, Fail Loud** - Validate early, throw specific exceptions, log everything
@@ -10,6 +14,11 @@ This document defines the coding standards for CC Director. This is **enterprise
 4. **Responsive UI** - Users must get immediate feedback for every action
 5. **Test Everything** - Every feature needs unit tests
 6. **Zero Warnings** - Treat warnings as errors
+7. **Simplicity** - The simplest solution that works correctly
+
+### Dependency Injection
+
+Use DI sparingly. Full DI containers create a "black box problem" where object creation is hidden behind container magic, making it harder to reason about what's actually happening. Prefer explicit construction with `new` for most classes. Use DI only when you genuinely need runtime substitution or when a framework requires it.
 
 ---
 
@@ -37,6 +46,8 @@ This document defines the coding standards for CC Director. This is **enterprise
    - Show items immediately with placeholder data
    - Load expensive metadata (file reads, API calls) in background
    - Update items as data becomes available
+
+5. **Disable During Async**: Disable buttons during async operations to prevent double-clicks
 
 ### Examples
 
@@ -67,93 +78,22 @@ public MyDialog()
 
 ---
 
-## 2. Logging Standards
+## 2. Error Handling
 
-### Use FileLog for All Operations
+### Universal Rule: Catch at the Boundary
 
-CC Director uses `FileLog` for structured logging. Logs are written to:
-- `%LOCALAPPDATA%/CcDirector/logs/director-YYYY-MM-DD-PID.log`
+Every UI framework has "boundaries" where user actions enter your code. Catch exceptions **only** at these boundaries. Never in helpers or services. This principle is framework-agnostic — included here for cross-project reference.
 
-### Logging Levels
+| Framework | Boundaries |
+|-----------|-----------|
+| WPF | Event handlers (`Button_Click`), lifecycle (`Loaded`), timer callbacks, external event subscriptions |
+| Blazor Server | Controller actions, component lifecycle (`OnInitializedAsync`) |
+| API | Controller actions, middleware |
 
-| Level | When to Use | Example |
-|-------|-------------|---------|
-| **Error** | Operation failed, needs attention | Exception caught, process failed |
-| **Warning** | Potential issue, didn't cause failure | Retry needed, deprecated usage |
-| **Info** | Important business events | Session start/stop, user actions |
-| **Debug** | Detailed diagnostic info | Method entry/exit, state changes |
-
-### Required Logging
-
-**Service/Manager Methods (Public):**
-- Log entry with parameters
-- Log exit with result
-- Log errors with full context
-
-```csharp
-public Session CreateSession(string repoPath, string? claudeArgs)
-{
-    FileLog.Write($"[SessionManager] CreateSession: repoPath={repoPath}, args={claudeArgs}");
-
-    try
-    {
-        var session = CreateSessionInternal(repoPath, claudeArgs);
-        FileLog.Write($"[SessionManager] Session created: id={session.Id}, pid={session.ProcessId}");
-        return session;
-    }
-    catch (Exception ex)
-    {
-        FileLog.Write($"[SessionManager] CreateSession FAILED: {ex.Message}");
-        throw;
-    }
-}
-```
-
-**Event Handlers and Entry Points:**
-- Try-catch-finally with logging
-- User-friendly error message
-- Full exception logged
-
-```csharp
-private async void BtnNewSession_Click(object sender, RoutedEventArgs e)
-{
-    FileLog.Write("[MainWindow] New Session button clicked");
-    try
-    {
-        await CreateNewSessionAsync();
-    }
-    catch (Exception ex)
-    {
-        FileLog.Write($"[MainWindow] New Session FAILED: {ex}");
-        MessageBox.Show($"Failed to create session:\n{ex.Message}",
-            "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-    }
-}
-```
-
-### Log Context
-
-Always include relevant context in log messages:
-
-```csharp
-// GOOD - includes context
-FileLog.Write($"[SessionManager] Session {session.Id} exited: pid={pid}, exitCode={exitCode}");
-
-// BAD - no context
-FileLog.Write("Session exited");
-```
-
-### Never Log Sensitive Data
-
-Do not log:
-- API keys or tokens
-- Passwords or credentials
-- Personal user information
-- Full file contents (truncate to ~100 chars)
-
----
-
-## 3. Error Handling
+**At every boundary:**
+1. Log the full exception internally (class + method + full exception)
+2. Show the user a friendly message (never raw exception text)
+3. Let service/helper methods throw — they are NOT boundaries
 
 ### No Fallback Programming
 
@@ -242,7 +182,9 @@ public class OperationResult<T>
 
 ---
 
-## 4. Null-Forgiving Operator (!) Is FORBIDDEN
+## 3. Null Safety
+
+### The Null-Forgiving Operator (`!`) Is FORBIDDEN
 
 The null-forgiving operator (`!`) is **FORBIDDEN** in this codebase. It is lazy programming that hides problems instead of fixing them.
 
@@ -305,6 +247,110 @@ private void OnLoaded()
 }
 ```
 
+### Pattern Matching for Null Checks
+
+```csharp
+// Preferred
+if (session is null)
+    throw new ArgumentNullException(nameof(session));
+
+if (result is not null)
+    ProcessResult(result);
+```
+
+---
+
+## 4. Logging Standards
+
+### Use FileLog for All Operations
+
+CC Director uses `FileLog` for structured logging. Logs are written to:
+- `%LOCALAPPDATA%/CcDirector/logs/director-YYYY-MM-DD-PID.log`
+
+### Logging Levels
+
+| Level | When to Use | Example |
+|-------|-------------|---------|
+| **Error** | Operation failed, needs attention | Exception caught, process failed |
+| **Warning** | Potential issue, didn't cause failure | Retry needed, deprecated usage |
+| **Info** | Important business events | Session start/stop, user actions |
+| **Debug** | Detailed diagnostic info | Method entry/exit, state changes |
+
+### Required Logging
+
+**Service/Manager Methods (Public):**
+- Log entry with parameters
+- Log exit with result
+- Log errors with full context
+
+```csharp
+public Session CreateSession(string repoPath, string? claudeArgs)
+{
+    FileLog.Write($"[SessionManager] CreateSession: repoPath={repoPath}, args={claudeArgs}");
+
+    try
+    {
+        var session = CreateSessionInternal(repoPath, claudeArgs);
+        FileLog.Write($"[SessionManager] Session created: id={session.Id}, pid={session.ProcessId}");
+        return session;
+    }
+    catch (Exception ex)
+    {
+        FileLog.Write($"[SessionManager] CreateSession FAILED: {ex.Message}");
+        throw;
+    }
+}
+```
+
+**Event Handlers and Entry Points:**
+- Try-catch-finally with logging
+- User-friendly error message
+- Full exception logged
+
+```csharp
+private async void BtnNewSession_Click(object sender, RoutedEventArgs e)
+{
+    FileLog.Write("[MainWindow] New Session button clicked");
+    try
+    {
+        await CreateNewSessionAsync();
+    }
+    catch (Exception ex)
+    {
+        FileLog.Write($"[MainWindow] New Session FAILED: {ex}");
+        MessageBox.Show($"Failed to create session:\n{ex.Message}",
+            "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+}
+```
+
+### Log Format
+
+```
+[ClassName] MethodName: context={value}, result={result}
+[ClassName] MethodName FAILED: {ex.Message}
+```
+
+### Log Context
+
+Always include relevant context in log messages:
+
+```csharp
+// GOOD - includes context
+FileLog.Write($"[SessionManager] Session {session.Id} exited: pid={pid}, exitCode={exitCode}");
+
+// BAD - no context
+FileLog.Write("Session exited");
+```
+
+### Never Log Sensitive Data
+
+Do not log:
+- API keys or tokens
+- Passwords or credentials
+- Personal user information
+- Full file contents (truncate to ~100 chars)
+
 ---
 
 ## 5. Testing Standards
@@ -362,9 +408,47 @@ public void Test1()
 | Validation | Valid + invalid inputs | Path validation |
 | Edge cases | Nulls, empty, boundaries | Empty list, max entries |
 
+### Test Project Configuration
+
+```xml
+<PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+</PropertyGroup>
+
+<ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
+    <PackageReference Include="xunit" Version="2.*" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.*" />
+</ItemGroup>
+```
+
 ---
 
-## 6. Threading and UI
+## 6. Async and Threading
+
+### Async Rules
+
+1. **Async all the way.** Once you go async, stay async up the call chain.
+2. **Never use `.Result` or `.Wait()`.** These cause deadlocks in UI applications.
+3. **`async void` only for event handlers.** Everything else returns `Task` or `Task<T>`.
+4. **Use `Task.Run` for CPU-bound work** to keep the UI thread free.
+
+```csharp
+// async void ONLY for event handlers
+private async void Button_Click(object sender, RoutedEventArgs e)
+{
+    await DoWorkAsync();
+}
+
+// Task for everything else
+private async Task DoWorkAsync()
+{
+    var result = await Task.Run(() => ExpensiveOperation());
+    UpdateUI(result);
+}
+```
 
 ### WPF Threading Rules
 
@@ -387,104 +471,100 @@ private void OnToolResult(string result)
 }
 ```
 
-### Async Event Handlers
+### Thread Safety Guidelines
 
-```csharp
-// Use async void ONLY for event handlers
-private async void Button_Click(object sender, RoutedEventArgs e)
-{
-    await DoWorkAsync();
-}
-
-// Use async Task for everything else
-private async Task DoWorkAsync()
-{
-    await Task.Run(() => ExpensiveOperation());
-}
-```
+- Use `Dispatcher.BeginInvoke` (not `Invoke`) for non-blocking UI updates
+- Use `ConcurrentDictionary` for shared caches across threads
+- Use `lock` for short critical sections protecting shared mutable state
+- Use `Debug.Assert(Dispatcher.CheckAccess())` to verify thread assumptions
+- Create defensive `.ToList()` snapshots when iterating collections that may be modified
 
 ---
 
 ## 7. Naming Conventions
 
-### Classes
-- **PascalCase** for all class names
-- Suffix patterns:
-  - `*Manager` for lifecycle management: `SessionManager`
-  - `*Store` for persistence: `RecentSessionStore`
-  - `*Backend` for I/O abstraction: `ConPtyBackend`
-  - `*Reader` for read-only access: `ClaudeSessionReader`
-  - `*ViewModel` for UI binding: `SessionViewModel`
+### General Rules
 
-### Methods
-- **PascalCase**
-- **Verb + Noun** pattern: `CreateSession()`, `SendText()`
-- Async methods: suffix with `Async`: `SendTextAsync()`, `KillAsync()`
-- Boolean methods: prefix with `Is`, `Has`, `Can`: `IsRunning()`, `HasExited()`
+| Element | Convention | Example |
+|---------|------------|---------|
+| Classes | PascalCase | `SessionManager` |
+| Interfaces | IPascalCase | `ISessionProvider` |
+| Methods | PascalCase, Verb+Noun | `CreateSession()`, `SendText()` |
+| Async methods | Suffix `Async` | `SendTextAsync()`, `KillAsync()` |
+| Properties | PascalCase | `IsRunning`, `SessionCount` |
+| Private fields | _camelCase | `_sessionManager`, `_sessions` |
+| Local variables | camelCase | `sessionId`, `exitCode` |
+| Constants | PascalCase | `DefaultTimeout`, `MaxRetries` |
+| Enums | PascalCase (singular) | `SessionState { Running, Stopped }` |
+| Boolean members | `Is`, `Has`, `Can` prefix | `IsRunning`, `HasExited`, `CanSend` |
 
-### Private Fields
-- **_camelCase** with underscore prefix
-- Readonly when possible: `private readonly SessionManager _sessionManager;`
+### Class Suffix Conventions
+
+| Suffix | Responsibility | Example |
+|--------|---------------|---------|
+| `*Manager` | Lifecycle management, orchestration | `SessionManager` |
+| `*Store` | Persistence (load/save) | `RecentSessionStore` |
+| `*Backend` | I/O abstraction, external processes | `ConPtyBackend` |
+| `*Reader` | Read-only data access | `ClaudeSessionReader` |
+| `*ViewModel` | UI data binding | `SessionViewModel` |
+| `*Control` | Custom WPF control | `TerminalControl` |
+| `*Dialog` | Modal/modeless window | `NewSessionDialog` |
+
+### Event Handler Naming
 
 ```csharp
-// Good
+// Pattern: ElementName_EventName
+private void BtnNewSession_Click(object sender, RoutedEventArgs e) { }
+private void SessionList_SelectionChanged(object sender, SelectionChangedEventArgs e) { }
+
+// Pattern: OnEventName for overrides and lifecycle
+protected override void OnClosing(CancelEventArgs e) { }
+private void OnSessionExited(Session session) { }
+```
+
+### Private Fields
+
+```csharp
+// Good - underscore prefix, readonly when possible
 private readonly SessionManager _sessionManager;
 private readonly ObservableCollection<SessionViewModel> _sessions = new();
 private CancellationTokenSource? _cts;
 
-// Bad
-private SessionManager sessionManager;  // Missing underscore
+// Bad - missing underscore
+private SessionManager sessionManager;
 ```
 
 ---
 
-## 8. Project Configuration
+## 8. Architecture and Project Structure
 
-### Every Project Must Include
+### Layer Separation
+
+```
+Solution/
+  src/
+    ProjectName.Core/         # Business logic, models, services (no UI references)
+    ProjectName.Wpf/          # WPF UI, controls, dialogs, view models
+    ProjectName.Core.Tests/   # Unit tests for Core
+    ProjectName.TestHarness/  # Integration testing and manual testing
+```
+
+### Rules
+
+- **Core has no UI dependencies.** The Core project must never reference WPF, WinForms, or any UI framework. This enables testing without a UI thread.
+- **One responsibility per class.** Managers manage lifecycle. Stores handle persistence. Backends handle I/O. Readers handle read-only access.
+- **InternalsVisibleTo for testing.** Expose internal members to test projects only.
 
 ```xml
-<PropertyGroup>
-  <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-  <Nullable>enable</Nullable>
-  <ImplicitUsings>enable</ImplicitUsings>
-</PropertyGroup>
+<!-- Core.csproj -->
+<ItemGroup>
+  <InternalsVisibleTo Include="ProjectName.Core.Tests" />
+</ItemGroup>
 ```
 
 ---
 
-## 9. Documentation
-
-### XML Documentation for Public APIs
-
-```csharp
-/// <summary>
-/// Creates a new Claude session in the specified repository.
-/// </summary>
-/// <param name="repoPath">Path to the git repository.</param>
-/// <param name="claudeArgs">Optional arguments to pass to Claude.</param>
-/// <returns>The created session.</returns>
-/// <exception cref="DirectoryNotFoundException">Repository path does not exist.</exception>
-public Session CreateSession(string repoPath, string? claudeArgs = null)
-```
-
-### Code Comments
-
-- Comments explain **why**, not **what**
-- Code should be self-documenting through good names
-
-```csharp
-// GOOD - explains why
-// Delay to ensure Claude has initialized before sending input
-await Task.Delay(500);
-
-// BAD - explains what (obvious from code)
-// Wait 500 milliseconds
-await Task.Delay(500);
-```
-
----
-
-## 10. Validation
+## 9. Validation
 
 ### Validate Early
 
@@ -516,40 +596,228 @@ if (result is not null)
 if (session == null)  // Less clear intent
 ```
 
+### Validation Boundaries
+
+Validate at system boundaries where external data enters:
+- User input (text boxes, dialog results)
+- File I/O (paths, file contents)
+- External API responses
+- Process output
+
+Trust internal code within the same assembly.
+
 ---
 
-## 11. Quick Reference
+## 10. UI Patterns
 
-| Aspect | Convention | Example |
-|--------|------------|---------|
+### MVVM Lite
+
+For smaller WPF applications, a pragmatic approach:
+
+- **Code-behind for simple event handlers.** Don't over-abstract with full MVVM for small dialogs.
+- **ViewModels for data binding.** Use `INotifyPropertyChanged` for dynamic UI updates.
+- **Static resources for shared styles.** Define in `App.xaml` for consistency.
+
+### Dialog Pattern
+
+```csharp
+// Dialogs set Owner for proper centering and z-order
+var dialog = new NewSessionDialog { Owner = this };
+if (dialog.ShowDialog() == true)
+{
+    var result = dialog.SelectedItem;
+    // Use result...
+}
+```
+
+### Control Pattern
+
+Custom controls extend `FrameworkElement` or `UserControl`:
+- `UserControl` for composite controls with XAML
+- `FrameworkElement` for render-level controls (e.g., terminal rendering with `OnRender`)
+
+### Resource Pattern
+
+Define shared brushes and styles in `App.xaml`:
+
+```xml
+<Application.Resources>
+    <SolidColorBrush x:Key="PanelBackground" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="AccentBrush" Color="#007ACC" />
+    <SolidColorBrush x:Key="TextForeground" Color="#CCCCCC" />
+</Application.Resources>
+```
+
+Reference with `{StaticResource}`:
+
+```xml
+<Border Background="{StaticResource PanelBackground}">
+    <TextBlock Foreground="{StaticResource TextForeground}" />
+</Border>
+```
+
+---
+
+## 11. Performance
+
+### Caching
+
+Cache expensive-to-create objects, especially in render paths:
+
+```csharp
+// Cache Typefaces (immutable, safe to share)
+private static readonly Typeface _typefaceNormal = new(
+    _fontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+
+// Cache Brushes with Freeze() for cross-thread access
+private static SolidColorBrush GetCachedBrush(Color color)
+{
+    lock (_brushCacheLock)
+    {
+        if (!_brushCache.TryGetValue(color, out var brush))
+        {
+            brush = new SolidColorBrush(color);
+            brush.Freeze();  // Required for cross-thread use
+            _brushCache[color] = brush;
+        }
+        return brush;
+    }
+}
+```
+
+### Regex Safety
+
+Always set timeouts on user-facing regex to prevent catastrophic backtracking:
+
+```csharp
+private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(50);
+private static readonly Regex PathRegex = new(
+    @"[A-Za-z]:\\[^\s""'<>|*?]+",
+    RegexOptions.Compiled,
+    RegexTimeout);
+```
+
+### WPF Rendering Performance
+
+- Use `VirtualizingPanel.IsVirtualizing="True"` on large lists
+- Use `VirtualizingPanel.VirtualizationMode="Recycling"` for memory efficiency
+- Avoid per-character object allocation in render loops
+- Cache `FormattedText` objects when text doesn't change
+- Use `ConcurrentDictionary` for async path existence caches in render paths
+
+---
+
+## 12. Security
+
+### Never Hard-Code Credentials
+
+```csharp
+// BAD
+var apiKey = "sk-abc123...";
+
+// GOOD - read from environment or secure storage
+var apiKey = Environment.GetEnvironmentVariable("API_KEY")
+    ?? throw new InvalidOperationException("API_KEY environment variable not set");
+```
+
+### Never Log Secrets
+
+```csharp
+// BAD
+FileLog.Write($"Connecting with key={apiKey}");
+
+// GOOD
+FileLog.Write($"Connecting with key={apiKey[..4]}...");
+```
+
+### Process Execution
+
+- Validate all paths before passing to `Process.Start`
+- Never construct shell commands from user input
+- Use argument arrays, not string concatenation
+
+---
+
+## 13. Documentation
+
+### XML Documentation for Public APIs
+
+```csharp
+/// <summary>
+/// Creates a new Claude session in the specified repository.
+/// </summary>
+/// <param name="repoPath">Path to the git repository.</param>
+/// <param name="claudeArgs">Optional arguments to pass to Claude.</param>
+/// <returns>The created session.</returns>
+/// <exception cref="DirectoryNotFoundException">Repository path does not exist.</exception>
+public Session CreateSession(string repoPath, string? claudeArgs = null)
+```
+
+### Code Comments
+
+- Comments explain **why**, not **what**
+- Code should be self-documenting through good names
+
+```csharp
+// GOOD - explains why
+// Delay to ensure Claude has initialized before sending input
+await Task.Delay(500);
+
+// BAD - explains what (obvious from code)
+// Wait 500 milliseconds
+await Task.Delay(500);
+```
+
+---
+
+## 14. Project Configuration
+
+### Every Project Must Include
+
+```xml
+<PropertyGroup>
+  <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  <Nullable>enable</Nullable>
+  <ImplicitUsings>enable</ImplicitUsings>
+</PropertyGroup>
+```
+
+### Build Verification
+
+- Zero warnings policy: all warnings are errors
+- Run `dotnet build` before every commit
+- Run `dotnet test` before every push
+
+---
+
+## 15. Quick Reference
+
+| Aspect | Rule | Example |
+|--------|------|---------|
 | Warnings | Treat as errors | `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` |
 | Classes | PascalCase + suffix | `SessionManager`, `ConPtyBackend` |
 | Methods | PascalCase, Verb+Noun | `CreateSession()`, `SendTextAsync()` |
 | Private fields | _camelCase | `_sessionManager`, `_sessions` |
 | Async methods | Suffix with Async | `KillSessionAsync()` |
+| Null-forgiving (`!`) | Forbidden | Use explicit null checks |
+| `.Result` / `.Wait()` | Forbidden | Use `await` instead |
+| Fallback catches | Forbidden | Fix root cause |
 | Null checks | Pattern matching | `if (x is null)` |
 | Validation | Throw early | `ArgumentException.ThrowIfNullOrEmpty()` |
 | Logging | FileLog with context | `FileLog.Write($"[Class] message: {param}")` |
 | Try-catch | Entry points only | Event handlers, lifecycle methods |
 | UI thread | Dispatcher.BeginInvoke | For UI modifications from background |
+| `async void` | Event handlers only | Everything else returns `Task` |
 | Tests | Required for all public methods | Arrange-Act-Assert pattern |
+| Regex | Always set timeout | `TimeSpan.FromMilliseconds(50)` |
+| Brushes | Freeze for cross-thread | `brush.Freeze()` |
+| Collections | Snapshot before iterating across threads | `.ToList()` |
 
 ---
 
-## Summary
+## When in Doubt
 
-CC Director prioritizes:
-
-1. **Reliability** - Enterprise-level logging and error handling
-2. **Responsiveness** - Immediate UI feedback for all user actions
-3. **Testability** - Comprehensive test coverage
-4. **Maintainability** - Clear code structure and documentation
-5. **Debuggability** - Every operation is logged with context
-6. **Thread Safety** - Proper synchronization for UI operations
-7. **Simplicity** - The simplest solution that works correctly
-
-**When in doubt:**
-- Log more, not less
-- Fail explicitly, not silently
-- Show feedback immediately
-- Write a test
+1. Log more, not less
+2. Fail explicitly, not silently
+3. Show feedback immediately
+4. Write a test
