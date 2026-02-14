@@ -56,6 +56,9 @@ public sealed class Session : IDisposable
     /// <summary>User-chosen header color (hex string like "#2563EB"). Null means default dark header.</summary>
     public string? CustomColor { get; set; }
 
+    /// <summary>Prompt text the user was composing but hasn't sent yet. Persisted across switches and restarts.</summary>
+    public string? PendingPromptText { get; set; }
+
     /// <summary>Fires when ActivityState changes. Args: (oldState, newState).</summary>
     public event Action<ActivityState, ActivityState>? OnActivityStateChanged;
 
@@ -101,7 +104,8 @@ public sealed class Session : IDisposable
         ActivityState activityState,
         DateTimeOffset createdAt,
         string? customName,
-        string? customColor)
+        string? customColor,
+        string? pendingPromptText = null)
     {
         Id = id;
         RepoPath = repoPath;
@@ -114,6 +118,7 @@ public sealed class Session : IDisposable
         CreatedAt = createdAt;
         CustomName = customName;
         CustomColor = customColor;
+        PendingPromptText = pendingPromptText;
         Status = SessionStatus.Running;
 
         _backend.ProcessExited += OnBackendProcessExited;

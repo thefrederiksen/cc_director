@@ -258,6 +258,7 @@ public partial class MainWindow : Window
                     session.CustomColor = p.CustomColor;
 
                     var vm = new SessionViewModel(session, Dispatcher);
+                    vm.PendingPromptText = p.PendingPromptText ?? string.Empty;
                     _sessions.Add(vm);
                     restored++;
 
@@ -420,6 +421,13 @@ public partial class MainWindow : Window
 
     private void SessionList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        // Save prompt text for outgoing session
+        if (e.RemovedItems.Count > 0 && e.RemovedItems[0] is SessionViewModel outgoing)
+        {
+            outgoing.PendingPromptText = PromptInput.Text;
+            FileLog.Write($"[MainWindow] SessionSwitch: saved prompt for {outgoing.Session.Id}");
+        }
+
         if (SessionList.SelectedItem is not SessionViewModel vm)
         {
             DetachTerminal();
@@ -427,6 +435,11 @@ public partial class MainWindow : Window
         }
 
         AttachTerminal(vm.Session);
+
+        // Restore prompt text for incoming session
+        PromptInput.Text = vm.PendingPromptText;
+        PromptInput.CaretIndex = PromptInput.Text.Length;
+        FileLog.Write($"[MainWindow] SessionSwitch: restored prompt for {vm.Session.Id}");
 
         // Redirect focus back to terminal/prompt so the sidebar doesn't keep focus
         if (_terminalControl != null && SessionTabs.SelectedIndex == 0)
@@ -440,6 +453,7 @@ public partial class MainWindow : Window
         _activeSession = session;
         PlaceholderText.Visibility = Visibility.Collapsed;
         SessionTabs.Visibility = Visibility.Visible;
+        PromptBar.Visibility = Visibility.Visible;
 
         // Hide previous embedded backend (don't kill it)
         _activeEmbeddedBackend?.Hide();
@@ -503,6 +517,8 @@ public partial class MainWindow : Window
 
         GitChanges.Detach();
         SessionTabs.Visibility = Visibility.Collapsed;
+        PromptInput.Clear();
+        PromptBar.Visibility = Visibility.Collapsed;
         PlaceholderText.Visibility = Visibility.Visible;
     }
 
@@ -827,6 +843,14 @@ public partial class MainWindow : Window
         var text = PromptInput.Text.ReplaceLineEndings(" ").Trim();
         PromptInput.Clear();
 
+        // Clear saved prompt text so switching away and back shows empty box
+        var activeVm = _sessions.FirstOrDefault(s => s.Session.Id == _activeSession.Id);
+        if (activeVm != null)
+        {
+            activeVm.PendingPromptText = string.Empty;
+            FileLog.Write($"[MainWindow] SendPromptAsync: cleared PendingPromptText for {_activeSession.Id}");
+        }
+
         if (_activeSession.BackendType == SessionBackendType.Embedded && _activeEmbeddedBackend != null)
         {
             // Send keystrokes directly to the embedded console window
@@ -909,11 +933,43 @@ public partial class MainWindow : Window
 
         try
         {
+            // Sync prompt text from VMs to Session objects so it gets persisted.
+            // Must read PromptInput.Text on the UI thread.
+            if (Dispatcher.CheckAccess())
+            {
+                SyncPromptTextToSessions();
+            }
+            else
+            {
+                Dispatcher.Invoke(SyncPromptTextToSessions);
+            }
+
             _sessionManager.SaveCurrentState(app.SessionStateStore);
         }
         catch (Exception ex)
         {
             FileLog.Write($"[MainWindow] PersistSessionState error: {ex.Message}");
+        }
+    }
+
+    /// <summary>Copy prompt text from VMs (and the active PromptInput) to Session objects for persistence. Must run on UI thread.</summary>
+    private void SyncPromptTextToSessions()
+    {
+        FileLog.Write($"[MainWindow] SyncPromptTextToSessions: syncing {_sessions.Count} session(s)");
+
+        foreach (var vm in _sessions)
+        {
+            vm.Session.PendingPromptText = vm.PendingPromptText;
+        }
+
+        // For the active session, capture the live PromptInput text
+        if (_activeSession != null)
+        {
+            var activeVm = _sessions.FirstOrDefault(s => s.Session.Id == _activeSession.Id);
+            if (activeVm != null)
+            {
+                activeVm.Session.PendingPromptText = PromptInput.Text;
+            }
         }
     }
 
@@ -1590,6 +1646,9 @@ public class SessionViewModel : INotifyPropertyChanged
         // Update color
         CustomColor = color;
     }
+
+    /// <summary>Prompt text the user was composing but hasn't sent yet. Saved/restored on session switch.</summary>
+    public string PendingPromptText { get; set; } = string.Empty;
 
     public string StatusText => $"{Session.ActivityState} (PID {Session.ProcessId}) - ConPTY";
     public SolidColorBrush ActivityBrush => ActivityBrushes.GetValueOrDefault(Session.ActivityState, ActivityBrushes[ActivityState.Starting]);

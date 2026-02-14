@@ -424,9 +424,10 @@
                 </Grid>
 
                 <!-- Prompt bar (center column only) -->
-                <Border Grid.Row="2" Background="{StaticResource SidebarBackground}"
+                <Border x:Name="PromptBar" Grid.Row="2" Background="{StaticResource SidebarBackground}"
                         BorderBrush="#3C3C3C" BorderThickness="0,1,0,0" Padding="8"
-                        SizeChanged="PromptArea_SizeChanged">
+                        SizeChanged="PromptArea_SizeChanged"
+                        Visibility="Collapsed">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
