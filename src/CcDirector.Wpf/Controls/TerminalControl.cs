@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -25,17 +24,57 @@ public class TerminalControl : FrameworkElement
     private const int ScrollbackLines = 1000;
     private const double PollIntervalMs = 50;
 
-    // Link detection patterns
-    private static readonly Regex AbsoluteWindowsPathRegex = new(@"[A-Za-z]:\\[^\s""'<>|*?]+", RegexOptions.Compiled);
-    private static readonly Regex AbsoluteUnixPathRegex = new(@"/[a-z]/[^\s""'<>|*?]+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex RelativePathRegex = new(@"\.{0,2}/[^\s""'<>|*?:]+|[A-Za-z_][A-Za-z0-9_\-]*/[^\s""'<>|*?:]+", RegexOptions.Compiled);
-    private static readonly Regex UrlRegex = new(@"https?://[^\s""'<>]+|git@[^\s""'<>]+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Link detection patterns with 50ms timeout to prevent catastrophic backtracking
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(50);
+    private static readonly Regex AbsoluteWindowsPathRegex = new(@"[A-Za-z]:\\[^\s""'<>|*?]+", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex AbsoluteUnixPathRegex = new(@"/[a-z]/[^\s""'<>|*?]+", RegexOptions.Compiled | RegexOptions.IgnoreCase, RegexTimeout);
+    private static readonly Regex RelativePathRegex = new(@"\.{0,2}/[^\s""'<>|*?:]+|[A-Za-z_][A-Za-z0-9_\-]*/[^\s""'<>|*?:]+", RegexOptions.Compiled, RegexTimeout);
+    private static readonly Regex UrlRegex = new(@"https?://[^\s""'<>]+|git@[^\s""'<>]+", RegexOptions.Compiled | RegexOptions.IgnoreCase, RegexTimeout);
+
+    // Cached typefaces - avoid creating new Typeface per character (4 variants for normal/bold/italic combinations)
+    private static readonly FontFamily _fontFamily = new("Cascadia Mono, Consolas, Courier New");
+    private static readonly Typeface _typefaceNormal = new(_fontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+    private static readonly Typeface _typefaceBold = new(_fontFamily, FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+    private static readonly Typeface _typefaceItalic = new(_fontFamily, FontStyles.Italic, FontWeights.Normal, FontStretches.Normal);
+    private static readonly Typeface _typefaceBoldItalic = new(_fontFamily, FontStyles.Italic, FontWeights.Bold, FontStretches.Normal);
+
+    // Cached brushes - avoid creating new SolidColorBrush per character
+    private static readonly Dictionary<Color, SolidColorBrush> _brushCache = new();
+    private static readonly object _brushCacheLock = new();
+
+    private static SolidColorBrush GetCachedBrush(Color color)
+    {
+        lock (_brushCacheLock)
+        {
+            if (!_brushCache.TryGetValue(color, out var brush))
+            {
+                brush = new SolidColorBrush(color);
+                brush.Freeze();
+                _brushCache[color] = brush;
+            }
+            return brush;
+        }
+    }
+
+    private static Typeface GetCachedTypeface(bool bold, bool italic)
+    {
+        if (bold && italic) return _typefaceBoldItalic;
+        if (bold) return _typefaceBold;
+        if (italic) return _typefaceItalic;
+        return _typefaceNormal;
+    }
 
     private enum LinkType { None, Path, Url }
 
     // Link region for hover detection
     private readonly record struct LinkRegion(Rect Bounds, string Text, LinkType Type);
     private readonly List<LinkRegion> _linkRegions = new();
+
+    // DISABLED: Link detection caching - link detection is disabled for performance
+    // These will be used for on-demand link detection in future enhancement
+    // private long _lastLinkDetectionBufferPos = -1;
+    // private int _lastLinkDetectionScrollOffset = -1;
+    // private int _lastLinkDetectionRows = -1;
 
     private Session? _session;
     private long _bufferPosition;
@@ -50,6 +89,7 @@ public class TerminalControl : FrameworkElement
     // Scrollback
     private readonly List<TerminalCell[]> _scrollback = new();
     private int _scrollOffset; // 0 = bottom (current view), >0 = scrolled up
+    private bool _userScrolled; // True when user has manually scrolled up (prevents auto-scroll)
 
     // Selection state
     private bool _isSelecting;
@@ -61,9 +101,6 @@ public class TerminalControl : FrameworkElement
     private ContextMenu? _linkContextMenu;
     private string? _detectedLink;
     private LinkType _detectedLinkType;
-
-    // Path existence cache - avoids disk I/O in OnRender
-    private readonly ConcurrentDictionary<string, bool> _pathExistsCache = new();
 
     /// <summary>Raised when scroll position or scrollback changes.</summary>
     public event EventHandler? ScrollChanged;
@@ -93,18 +130,11 @@ public class TerminalControl : FrameworkElement
     // Font metrics
     private double _cellWidth;
     private double _cellHeight;
-    private Typeface _typeface;
     private double _fontSize = 14;
     private double _dpiScale = 1.0;
 
-    // Drawing
-    private readonly DrawingGroup _backingStore = new();
-
     public TerminalControl()
     {
-        _typeface = new Typeface(new FontFamily("Cascadia Mono, Consolas, Courier New"),
-            FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
-
         _cells = new TerminalCell[DefaultCols, DefaultRows];
         InitializeCells();
         MeasureFontMetrics();
@@ -116,12 +146,18 @@ public class TerminalControl : FrameworkElement
 
     public void Attach(Session session)
     {
+        FileLog.Write($"[TerminalControl] Attach: sessionId={session.Id}");
+
         Detach();
         _session = session;
         _bufferPosition = 0;
         _scrollOffset = 0;
         _scrollback.Clear();
-        _pathExistsCache.Clear();
+
+        // DISABLED: Link detection cache reset - link detection is disabled
+        // _lastLinkDetectionBufferPos = -1;
+        // _lastLinkDetectionScrollOffset = -1;
+        // _lastLinkDetectionRows = -1;
 
         RecalculateGridSize();
         InitializeCells();
@@ -147,86 +183,153 @@ public class TerminalControl : FrameworkElement
         _pollTimer.Start();
 
         InvalidateVisual();
+        FileLog.Write($"[TerminalControl] Attach complete: cols={_cols}, rows={_rows}");
     }
 
     public void Detach()
     {
+        var sessionId = _session?.Id;
+        FileLog.Write($"[TerminalControl] Detach: sessionId={sessionId}");
+
         _pollTimer?.Stop();
         _pollTimer = null;
         _session = null;
         _parser = null;
-        _pathExistsCache.Clear();
+        _linkRegions.Clear();
     }
+
+    // Track polling performance
+    private int _slowPollCount;
+    private DateTime _lastSlowPollLogTime = DateTime.MinValue;
+    private long _totalBytesReceived;
 
     private void PollTimer_Tick(object? sender, EventArgs e)
     {
-        if (_session?.Buffer == null) return;
-
-        var (data, newPos) = _session.Buffer.GetWrittenSince(_bufferPosition);
-        if (data.Length > 0)
+        var pollSw = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            _bufferPosition = newPos;
-            _parser?.Parse(data);
+            if (_session?.Buffer == null) return;
 
-            // Clear path cache so links re-evaluate with new terminal content
-            _pathExistsCache.Clear();
+            var bufferSw = System.Diagnostics.Stopwatch.StartNew();
+            var (data, newPos) = _session.Buffer.GetWrittenSince(_bufferPosition);
+            bufferSw.Stop();
 
-            // Clear selection when terminal output changes
-            ClearSelection();
+            if (data.Length > 0)
+            {
+                _totalBytesReceived += data.Length;
+                _bufferPosition = newPos;
 
-            // Auto-scroll to bottom when new data arrives
-            if (_scrollOffset > 0)
-                _scrollOffset = 0;
+                var parseSw = System.Diagnostics.Stopwatch.StartNew();
+                _parser?.Parse(data);
+                parseSw.Stop();
 
-            InvalidateVisual();
-            ScrollChanged?.Invoke(this, EventArgs.Empty);
+                // REMOVED: ClearSelection() - let selection persist during output
+                // Users can now select text while Claude is generating
+
+                // Only auto-scroll if user hasn't manually scrolled up
+                // This lets users review history while output continues
+                if (!_userScrolled && _scrollOffset > 0)
+                    _scrollOffset = 0;
+
+                InvalidateVisual();
+                ScrollChanged?.Invoke(this, EventArgs.Empty);
+
+                // Log large data chunks or slow parsing
+                if (parseSw.ElapsedMilliseconds > 10 || data.Length > 10000)
+                {
+                    FileLog.Write($"[TerminalControl] PollTimer_Tick: bytes={data.Length}, bufferRead={bufferSw.ElapsedMilliseconds}ms, parse={parseSw.ElapsedMilliseconds}ms, totalBytes={_totalBytesReceived}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[TerminalControl] PollTimer_Tick FAILED: {ex.Message}");
+        }
+        finally
+        {
+            pollSw.Stop();
+            if (pollSw.ElapsedMilliseconds > 30)
+            {
+                _slowPollCount++;
+                if ((DateTime.UtcNow - _lastSlowPollLogTime).TotalSeconds >= 1)
+                {
+                    FileLog.Write($"[TerminalControl] PollTimer_Tick SLOW: {pollSw.ElapsedMilliseconds}ms, slowCount={_slowPollCount}");
+                    _lastSlowPollLogTime = DateTime.UtcNow;
+                    _slowPollCount = 0;
+                }
+            }
         }
     }
 
+    // Track OnRender performance - log if consistently slow
+    private int _slowRenderCount;
+    private DateTime _lastSlowRenderLogTime = DateTime.MinValue;
+
     protected override void OnRender(DrawingContext drawingContext)
     {
-        var bg = new SolidColorBrush(Color.FromRgb(30, 30, 30));
-        bg.Freeze();
-        drawingContext.DrawRectangle(bg, null, new Rect(0, 0, ActualWidth, ActualHeight));
+        var renderSw = System.Diagnostics.Stopwatch.StartNew();
 
-        // Clear link regions for fresh hit-testing
-        _linkRegions.Clear();
+        var bg = GetCachedBrush(Color.FromRgb(30, 30, 30));
+        drawingContext.DrawRectangle(bg, null, new Rect(0, 0, ActualWidth, ActualHeight));
 
         if (_parser == null) return;
 
+        // Protect against division by zero if font metrics not yet measured
+        if (_cellWidth <= 0 || _cellHeight <= 0) return;
+
+        // DISABLED: Link detection during render causes performance issues
+        // Links will be detected on-demand via right-click context menu (future enhancement)
+        // See: docs/STATUS-TerminalPerformance.md for details
+        /*
+        // Only recalculate links when visible content has changed
+        // This prevents running regex 120 times/second (4 patterns x 30 rows x ~60fps)
+        bool needsLinkRecalc =
+            _lastLinkDetectionBufferPos != _bufferPosition ||
+            _lastLinkDetectionScrollOffset != _scrollOffset ||
+            _lastLinkDetectionRows != _rows;
+
+        long linkDetectMs = 0;
+        if (needsLinkRecalc)
+        {
+            var linkSw = System.Diagnostics.Stopwatch.StartNew();
+            _linkRegions.Clear();
+            DetectAllLinks();
+            _lastLinkDetectionBufferPos = _bufferPosition;
+            _lastLinkDetectionScrollOffset = _scrollOffset;
+            _lastLinkDetectionRows = _rows;
+            linkSw.Stop();
+            linkDetectMs = linkSw.ElapsedMilliseconds;
+        }
+
         // Link color - light blue like web links
         var linkColor = Color.FromRgb(0x6C, 0xB6, 0xFF);
-        var linkBrush = new SolidColorBrush(linkColor);
-        linkBrush.Freeze();
+        var linkBrush = GetCachedBrush(linkColor);
 
         // Underline pen for links
         var underlinePen = new Pen(linkBrush, 1);
         underlinePen.Freeze();
+        */
 
         for (int row = 0; row < _rows; row++)
         {
-            // Get line text and find link matches for this row
-            string lineText = GetLineText(row);
-            var linkMatches = FindAllLinkMatches(lineText);
-
-            // Create a lookup for which columns are part of a link
+            // DISABLED: Link column lookup - see above
+            /*
+            // Build column-to-link lookup from cached _linkRegions for this row
             var columnToLink = new Dictionary<int, LinkMatch>();
-            foreach (var match in linkMatches)
+            foreach (var region in _linkRegions)
             {
-                for (int c = match.StartCol; c < match.EndCol && c < _cols; c++)
-                {
-                    columnToLink[c] = match;
-                }
+                // Check if this region is on the current row
+                int regionRow = (int)(region.Bounds.Y / _cellHeight);
+                if (regionRow != row) continue;
 
-                // Store link region for hover detection
-                double linkX = match.StartCol * _cellWidth;
-                double linkY = row * _cellHeight;
-                double linkWidth = (match.EndCol - match.StartCol) * _cellWidth;
-                _linkRegions.Add(new LinkRegion(
-                    new Rect(linkX, linkY, linkWidth, _cellHeight),
-                    match.Text,
-                    match.Type));
+                int startCol = (int)(region.Bounds.X / _cellWidth);
+                int endCol = startCol + (int)(region.Bounds.Width / _cellWidth);
+                for (int c = startCol; c < endCol && c < _cols; c++)
+                {
+                    columnToLink[c] = new LinkMatch(startCol, endCol, region.Text, region.Type);
+                }
             }
+            */
 
             for (int col = 0; col < _cols; col++)
             {
@@ -266,8 +369,7 @@ public class TerminalControl : FrameworkElement
                 // Draw background if not default
                 if (cell.Background != default && cell.Background != Color.FromRgb(30, 30, 30))
                 {
-                    var cellBg = new SolidColorBrush(cell.Background);
-                    cellBg.Freeze();
+                    var cellBg = GetCachedBrush(cell.Background);
                     drawingContext.DrawRectangle(cellBg, null,
                         new Rect(col * _cellWidth, row * _cellHeight, _cellWidth, _cellHeight));
                 }
@@ -276,16 +378,15 @@ public class TerminalControl : FrameworkElement
                 char ch = cell.Character;
                 if (ch == '\0' || ch == ' ') continue;
 
-                // Determine if this character is part of a link
-                bool isLink = columnToLink.ContainsKey(col);
+                // DISABLED: Link detection - links no longer highlighted during render
+                // bool isLink = columnToLink.ContainsKey(col);
+                // var fg = isLink ? linkColor : (cell.Foreground == default ? Colors.LightGray : cell.Foreground);
+                // var brush = isLink ? linkBrush : GetCachedBrush(fg);
 
-                var fg = isLink ? linkColor : (cell.Foreground == default ? Colors.LightGray : cell.Foreground);
-                var brush = isLink ? linkBrush : new SolidColorBrush(fg);
-                if (!isLink) brush.Freeze();
+                var fg = cell.Foreground == default ? Colors.LightGray : cell.Foreground;
+                var brush = GetCachedBrush(fg);
 
-                var weight = cell.Bold ? FontWeights.Bold : FontWeights.Normal;
-                var style = cell.Italic ? FontStyles.Italic : FontStyles.Normal;
-                var tf = new Typeface(_typeface.FontFamily, style, weight, FontStretches.Normal);
+                var tf = GetCachedTypeface(cell.Bold, cell.Italic);
 
                 var formattedText = new FormattedText(
                     ch.ToString(),
@@ -301,6 +402,8 @@ public class TerminalControl : FrameworkElement
 
                 drawingContext.DrawText(formattedText, new Point(charX, charY));
 
+                // DISABLED: Link underlines - see above
+                /*
                 // Draw underline for links
                 if (isLink)
                 {
@@ -309,6 +412,7 @@ public class TerminalControl : FrameworkElement
                         new Point(charX, underlineY),
                         new Point(charX + _cellWidth, underlineY));
                 }
+                */
             }
         }
 
@@ -316,8 +420,7 @@ public class TerminalControl : FrameworkElement
         if (_hasSelection)
         {
             var (startCol, startRow, endCol, endRow) = NormalizeSelection();
-            var highlightBrush = new SolidColorBrush(Color.FromArgb(100, 50, 100, 200));
-            highlightBrush.Freeze();
+            var highlightBrush = GetCachedBrush(Color.FromArgb(100, 50, 100, 200));
 
             for (int row = startRow; row <= endRow; row++)
             {
@@ -339,11 +442,24 @@ public class TerminalControl : FrameworkElement
             var (cursorCol, cursorRow) = _parser.GetCursorPosition();
             if (cursorCol >= 0 && cursorCol < _cols && cursorRow >= 0 && cursorRow < _rows)
             {
-                var cursorBrush = new SolidColorBrush(Color.FromArgb(180, 200, 200, 200));
-                cursorBrush.Freeze();
+                var cursorBrush = GetCachedBrush(Color.FromArgb(180, 200, 200, 200));
                 drawingContext.DrawRectangle(cursorBrush, null,
                     new Rect(cursorCol * _cellWidth, cursorRow * _cellHeight,
                         _cellWidth, _cellHeight));
+            }
+        }
+
+        // Performance logging
+        renderSw.Stop();
+        if (renderSw.ElapsedMilliseconds > 50)
+        {
+            _slowRenderCount++;
+            // Only log once per second to avoid flooding
+            if ((DateTime.UtcNow - _lastSlowRenderLogTime).TotalSeconds >= 1)
+            {
+                FileLog.Write($"[TerminalControl] OnRender SLOW: {renderSw.ElapsedMilliseconds}ms (rows={_rows}, slowCount={_slowRenderCount})");
+                _lastSlowRenderLogTime = DateTime.UtcNow;
+                _slowRenderCount = 0;
             }
         }
     }
@@ -378,33 +494,44 @@ public class TerminalControl : FrameworkElement
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
-        base.OnMouseLeftButtonDown(e);
-        Focus();
-
-        var pos = e.GetPosition(this);
-
-        // Check if clicking on a link - show context menu
-        foreach (var region in _linkRegions)
+        try
         {
-            if (region.Bounds.Contains(pos))
+            base.OnMouseLeftButtonDown(e);
+            Focus();
+
+            var pos = e.GetPosition(this);
+
+            // DISABLED: Link hit-testing - links no longer detected during render
+            // On-demand link detection will be added via right-click context menu
+            /*
+            // Check if clicking on a link - show context menu
+            foreach (var region in _linkRegions)
             {
-                ShowLinkContextMenu(pos, region.Text, region.Type);
-                e.Handled = true;
-                return;
+                if (region.Bounds.Contains(pos))
+                {
+                    ShowLinkContextMenu(pos, region.Text, region.Type);
+                    e.Handled = true;
+                    return;
+                }
             }
+            */
+
+            // Start selection
+            var cell = HitTestCell(pos);
+
+            _selectionStart = cell;
+            _selectionEnd = cell;
+            _isSelecting = true;
+            _hasSelection = false;
+
+            CaptureMouse();
+            InvalidateVisual();
+            e.Handled = true;
         }
-
-        // Not clicking on a link - start selection
-        var cell = HitTestCell(pos);
-
-        _selectionStart = cell;
-        _selectionEnd = cell;
-        _isSelecting = true;
-        _hasSelection = false;
-
-        CaptureMouse();
-        InvalidateVisual();
-        e.Handled = true;
+        catch (Exception ex)
+        {
+            FileLog.Write($"[TerminalControl] OnMouseLeftButtonDown FAILED: {ex.Message}");
+        }
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -413,6 +540,8 @@ public class TerminalControl : FrameworkElement
 
         var pos = e.GetPosition(this);
 
+        // DISABLED: Link hover cursor - links no longer detected during render
+        /*
         // Update cursor based on whether hovering over a link
         bool overLink = false;
         foreach (var region in _linkRegions)
@@ -424,6 +553,8 @@ public class TerminalControl : FrameworkElement
             }
         }
         Cursor = overLink ? Cursors.Hand : Cursors.IBeam;
+        */
+        Cursor = Cursors.IBeam;
 
         // Handle selection dragging
         if (!_isSelecting) return;
@@ -455,78 +586,119 @@ public class TerminalControl : FrameworkElement
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
-        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
-        bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-
-        // Ctrl+C with selection = copy to clipboard (not SIGINT)
-        // Ctrl+Shift+C = always copy to clipboard
-        if (ctrl && e.Key == Key.C && _hasSelection)
+        try
         {
-            FileLog.Write($"[TerminalControl] Ctrl+C detected with selection, copying to clipboard");
-            CopySelectionToClipboard();
-            ClearSelection();
-            InvalidateVisual();
-            e.Handled = true;
-            return;
-        }
+            bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+            bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
 
-        if (ctrl && shift && e.Key == Key.C)
-        {
-            FileLog.Write($"[TerminalControl] Ctrl+Shift+C detected, hasSelection={_hasSelection}");
-            if (_hasSelection)
+            // Ctrl+C with selection = copy to clipboard (not SIGINT)
+            // Ctrl+Shift+C = always copy to clipboard
+            if (ctrl && e.Key == Key.C && _hasSelection)
             {
+                FileLog.Write($"[TerminalControl] Ctrl+C detected with selection, copying to clipboard");
                 CopySelectionToClipboard();
                 ClearSelection();
                 InvalidateVisual();
+                e.Handled = true;
+                return;
             }
-            e.Handled = true;
-            return;
+
+            if (ctrl && shift && e.Key == Key.C)
+            {
+                FileLog.Write($"[TerminalControl] Ctrl+Shift+C detected, hasSelection={_hasSelection}");
+                if (_hasSelection)
+                {
+                    CopySelectionToClipboard();
+                    ClearSelection();
+                    InvalidateVisual();
+                }
+                e.Handled = true;
+                return;
+            }
+
+            if (_session == null) return;
+
+            byte[]? data = MapKeyToBytes(e.Key, Keyboard.Modifiers);
+            if (data != null)
+            {
+                _session.SendInput(data);
+                e.Handled = true;
+            }
         }
-
-        if (_session == null) return;
-
-        byte[]? data = MapKeyToBytes(e.Key, Keyboard.Modifiers);
-        if (data != null)
+        catch (Exception ex)
         {
-            _session.SendInput(data);
-            e.Handled = true;
+            FileLog.Write($"[TerminalControl] OnPreviewKeyDown FAILED: {ex.Message}");
         }
     }
 
     protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
     {
-        base.OnMouseRightButtonUp(e);
-
-        // Right-click with selection copies to clipboard
-        if (_hasSelection)
+        try
         {
-            FileLog.Write($"[TerminalControl] Right-click with selection, copying to clipboard");
-            CopySelectionToClipboard();
-            ClearSelection();
-            InvalidateVisual();
-            e.Handled = true;
+            base.OnMouseRightButtonUp(e);
+
+            // Right-click with selection copies to clipboard
+            if (_hasSelection)
+            {
+                FileLog.Write($"[TerminalControl] Right-click with selection, copying to clipboard");
+                CopySelectionToClipboard();
+                ClearSelection();
+                InvalidateVisual();
+                e.Handled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[TerminalControl] OnMouseRightButtonUp FAILED: {ex.Message}");
         }
     }
 
     protected override void OnTextInput(TextCompositionEventArgs e)
     {
-        if (_session == null || string.IsNullOrEmpty(e.Text)) return;
+        try
+        {
+            if (_session == null || string.IsNullOrEmpty(e.Text)) return;
 
-        var bytes = System.Text.Encoding.UTF8.GetBytes(e.Text);
-        _session.SendInput(bytes);
-        e.Handled = true;
+            var bytes = System.Text.Encoding.UTF8.GetBytes(e.Text);
+            _session.SendInput(bytes);
+            e.Handled = true;
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[TerminalControl] OnTextInput FAILED: {ex.Message}");
+        }
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
-        int lines = e.Delta > 0 ? 3 : -3;
-        ScrollOffset = _scrollOffset + lines; // Uses property to trigger event
-        e.Handled = true;
+        try
+        {
+            int lines = e.Delta > 0 ? 3 : -3;
+            ScrollOffset = _scrollOffset + lines; // Uses property to trigger event
+
+            // Track if user is reviewing history (scrolled up)
+            // Reset when user scrolls back to bottom
+            _userScrolled = _scrollOffset > 0;
+
+            e.Handled = true;
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[TerminalControl] OnMouseWheel FAILED: {ex.Message}");
+        }
     }
 
     private void RecalculateGridSize()
     {
         if (ActualWidth <= 0 || ActualHeight <= 0)
+        {
+            _cols = DefaultCols;
+            _rows = DefaultRows;
+            return;
+        }
+
+        // Protect against division by zero if font metrics not yet measured
+        if (_cellWidth <= 0 || _cellHeight <= 0)
         {
             _cols = DefaultCols;
             _rows = DefaultRows;
@@ -556,7 +728,7 @@ public class TerminalControl : FrameworkElement
             "M",
             System.Globalization.CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
-            _typeface,
+            _typefaceNormal,
             _fontSize,
             Brushes.White,
             _dpiScale);
@@ -571,6 +743,10 @@ public class TerminalControl : FrameworkElement
     /// </summary>
     private (int col, int row) HitTestCell(Point position)
     {
+        // Protect against division by zero
+        if (_cellWidth <= 0 || _cellHeight <= 0)
+            return (0, 0);
+
         int col = (int)(position.X / _cellWidth);
         int row = (int)(position.Y / _cellHeight);
 
@@ -630,12 +806,47 @@ public class TerminalControl : FrameworkElement
     }
 
     /// <summary>
+    /// Detect all links in visible rows and populate _linkRegions.
+    /// Called only when visible content changes (buffer position, scroll, or resize).
+    /// </summary>
+    private void DetectAllLinks()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int totalMatches = 0;
+
+        for (int row = 0; row < _rows; row++)
+        {
+            string lineText = GetLineText(row);
+            var linkMatches = FindAllLinkMatches(lineText);
+
+            foreach (var match in linkMatches)
+            {
+                double linkX = match.StartCol * _cellWidth;
+                double linkY = row * _cellHeight;
+                double linkWidth = (match.EndCol - match.StartCol) * _cellWidth;
+                _linkRegions.Add(new LinkRegion(
+                    new Rect(linkX, linkY, linkWidth, _cellHeight),
+                    match.Text,
+                    match.Type));
+                totalMatches++;
+            }
+        }
+
+        sw.Stop();
+        if (sw.ElapsedMilliseconds > 10)
+        {
+            FileLog.Write($"[TerminalControl] DetectAllLinks: rows={_rows}, matches={totalMatches}, elapsed={sw.ElapsedMilliseconds}ms");
+        }
+    }
+
+    /// <summary>
     /// Represents a detected link match with its column range.
     /// </summary>
     private readonly record struct LinkMatch(int StartCol, int EndCol, string Text, LinkType Type);
 
     /// <summary>
     /// Find all link matches (paths and URLs) in a line of text.
+    /// Each regex has a 50ms timeout to prevent catastrophic backtracking hangs.
     /// </summary>
     private List<LinkMatch> FindAllLinkMatches(string lineText)
     {
@@ -643,135 +854,144 @@ public class TerminalControl : FrameworkElement
         if (string.IsNullOrWhiteSpace(lineText))
             return matches;
 
-        // Collect URL matches
-        foreach (Match m in UrlRegex.Matches(lineText))
+        var totalSw = System.Diagnostics.Stopwatch.StartNew();
+
+        // Collect URL matches (skip line on timeout)
+        var urlSw = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            matches.Add(new LinkMatch(m.Index, m.Index + m.Length, m.Value, LinkType.Url));
+            foreach (Match m in UrlRegex.Matches(lineText))
+            {
+                matches.Add(new LinkMatch(m.Index, m.Index + m.Length, m.Value, LinkType.Url));
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            FileLog.Write($"[TerminalControl] URL regex timeout, skipping line (length={lineText.Length})");
+        }
+        urlSw.Stop();
+        if (urlSw.ElapsedMilliseconds > 5)
+        {
+            FileLog.Write($"[TerminalControl] URL regex slow: {urlSw.ElapsedMilliseconds}ms, lineLen={lineText.Length}");
         }
 
-        // Collect absolute Windows path matches
-        foreach (Match m in AbsoluteWindowsPathRegex.Matches(lineText))
+        // Collect absolute Windows path matches (skip on timeout)
+        var winSw = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            string path = StripLineNumber(m.Value);
-            matches.Add(new LinkMatch(m.Index, m.Index + m.Length, path, LinkType.Path));
+            foreach (Match m in AbsoluteWindowsPathRegex.Matches(lineText))
+            {
+                string path = StripLineNumber(m.Value);
+                matches.Add(new LinkMatch(m.Index, m.Index + m.Length, path, LinkType.Path));
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            FileLog.Write($"[TerminalControl] Windows path regex timeout, skipping line (length={lineText.Length})");
+        }
+        winSw.Stop();
+        if (winSw.ElapsedMilliseconds > 5)
+        {
+            FileLog.Write($"[TerminalControl] Windows path regex slow: {winSw.ElapsedMilliseconds}ms, lineLen={lineText.Length}");
         }
 
-        // Collect Unix-style path matches
-        foreach (Match m in AbsoluteUnixPathRegex.Matches(lineText))
+        // Collect Unix-style path matches (skip on timeout)
+        var unixSw = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            string path = StripLineNumber(m.Value);
-            matches.Add(new LinkMatch(m.Index, m.Index + m.Length, path, LinkType.Path));
+            foreach (Match m in AbsoluteUnixPathRegex.Matches(lineText))
+            {
+                string path = StripLineNumber(m.Value);
+                matches.Add(new LinkMatch(m.Index, m.Index + m.Length, path, LinkType.Path));
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            FileLog.Write($"[TerminalControl] Unix path regex timeout, skipping line (length={lineText.Length})");
+        }
+        unixSw.Stop();
+        if (unixSw.ElapsedMilliseconds > 5)
+        {
+            FileLog.Write($"[TerminalControl] Unix path regex slow: {unixSw.ElapsedMilliseconds}ms, lineLen={lineText.Length}");
         }
 
-        // Collect relative path matches (only if session has repo path and path exists in cache)
+        // Collect relative path matches (only if session has repo path and path exists)
         if (_session?.RepoPath != null)
         {
-            foreach (Match m in RelativePathRegex.Matches(lineText))
+            var relSw = System.Diagnostics.Stopwatch.StartNew();
+            int fileChecks = 0;
+            try
             {
-                string relativePath = StripLineNumber(m.Value);
-                string fullPath = Path.Combine(_session.RepoPath, relativePath.Replace('/', '\\'));
+                foreach (Match m in RelativePathRegex.Matches(lineText))
+                {
+                    string relativePath = StripLineNumber(m.Value);
 
-                if (_pathExistsCache.TryGetValue(fullPath, out bool exists))
-                {
-                    // Cache hit
-                    if (exists)
-                        matches.Add(new LinkMatch(m.Index, m.Index + m.Length, relativePath, LinkType.Path));
-                }
-                else
-                {
-                    // Cache miss — don't block render; check in background
-                    var capturedPath = fullPath;
-                    var capturedRelative = relativePath;
-                    _ = Task.Run(() =>
+                    // Skip if this looks like a URL/domain (contains .com, .org, .net, etc.)
+                    // This prevents File.Exists from treating "www.linkedin.com/path" as a UNC path
+                    // which causes 22+ second network timeouts
+                    if (LooksLikeDomainPath(relativePath))
                     {
-                        bool found = File.Exists(capturedPath) || Directory.Exists(capturedPath);
-                        _pathExistsCache[capturedPath] = found;
-                        if (found)
-                            Dispatcher.BeginInvoke(InvalidateVisual);
-                    });
+                        continue;
+                    }
+
+                    string fullPath = Path.Combine(_session.RepoPath, relativePath.Replace('/', '\\'));
+
+                    var fileCheckSw = System.Diagnostics.Stopwatch.StartNew();
+                    bool exists = File.Exists(fullPath) || Directory.Exists(fullPath);
+                    fileCheckSw.Stop();
+                    fileChecks++;
+
+                    if (fileCheckSw.ElapsedMilliseconds > 50)
+                    {
+                        FileLog.Write($"[TerminalControl] File.Exists SLOW: {fileCheckSw.ElapsedMilliseconds}ms, path={fullPath}");
+                    }
+
+                    if (exists)
+                    {
+                        matches.Add(new LinkMatch(m.Index, m.Index + m.Length, relativePath, LinkType.Path));
+                    }
                 }
             }
+            catch (RegexMatchTimeoutException)
+            {
+                FileLog.Write($"[TerminalControl] Relative path regex timeout, skipping line (length={lineText.Length})");
+            }
+            relSw.Stop();
+            if (relSw.ElapsedMilliseconds > 10)
+            {
+                FileLog.Write($"[TerminalControl] Relative path check slow: {relSw.ElapsedMilliseconds}ms, fileChecks={fileChecks}, lineLen={lineText.Length}");
+            }
+        }
+
+        totalSw.Stop();
+        if (totalSw.ElapsedMilliseconds > 20)
+        {
+            FileLog.Write($"[TerminalControl] FindAllLinkMatches TOTAL slow: {totalSw.ElapsedMilliseconds}ms, matches={matches.Count}, lineLen={lineText.Length}");
         }
 
         return matches;
     }
 
     /// <summary>
-    /// Detect if there's a path or URL at the specified cell position.
+    /// Check if a path looks like a domain name (e.g., "www.linkedin.com/path").
+    /// These should not be passed to File.Exists as Windows treats them as UNC paths,
+    /// causing 22+ second network timeouts.
     /// </summary>
-    private (string? text, LinkType type) DetectLinkAtCell(int col, int row)
+    private static bool LooksLikeDomainPath(string path)
     {
-        string lineText = GetLineText(row);
-        if (string.IsNullOrWhiteSpace(lineText))
-            return (null, LinkType.None);
-
-        // Try URL first (more specific)
-        var urlMatch = UrlRegex.Match(lineText);
-        while (urlMatch.Success)
+        // Common TLDs that indicate this is a domain, not a file path
+        string[] domainIndicators = { ".com/", ".org/", ".net/", ".io/", ".dev/", ".co/", ".edu/", ".gov/", ".ai/" };
+        foreach (var indicator in domainIndicators)
         {
-            if (col >= urlMatch.Index && col < urlMatch.Index + urlMatch.Length)
-            {
-                return (urlMatch.Value, LinkType.Url);
-            }
-            urlMatch = urlMatch.NextMatch();
+            if (path.Contains(indicator, StringComparison.OrdinalIgnoreCase))
+                return true;
         }
 
-        // Try absolute Windows path
-        var winPathMatch = AbsoluteWindowsPathRegex.Match(lineText);
-        if (winPathMatch.Success)
-        {
-            FileLog.Write($"[TerminalControl] Found Windows path match: [{winPathMatch.Value}] at index {winPathMatch.Index}, length {winPathMatch.Length}, click col={col}");
-        }
-        while (winPathMatch.Success)
-        {
-            if (col >= winPathMatch.Index && col < winPathMatch.Index + winPathMatch.Length)
-            {
-                string path = StripLineNumber(winPathMatch.Value);
-                return (path, LinkType.Path);
-            }
-            winPathMatch = winPathMatch.NextMatch();
-        }
+        // Also check for www. prefix
+        if (path.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
+            return true;
 
-        // Try Unix-style absolute path (/c/path -> C:\path)
-        var unixPathMatch = AbsoluteUnixPathRegex.Match(lineText);
-        while (unixPathMatch.Success)
-        {
-            if (col >= unixPathMatch.Index && col < unixPathMatch.Index + unixPathMatch.Length)
-            {
-                string path = StripLineNumber(unixPathMatch.Value);
-                return (path, LinkType.Path);
-            }
-            unixPathMatch = unixPathMatch.NextMatch();
-        }
-
-        // Try relative path (only if we have a session with a repo path)
-        if (_session?.RepoPath != null)
-        {
-            var relPathMatch = RelativePathRegex.Match(lineText);
-            while (relPathMatch.Success)
-            {
-                if (col >= relPathMatch.Index && col < relPathMatch.Index + relPathMatch.Length)
-                {
-                    string relativePath = StripLineNumber(relPathMatch.Value);
-                    string fullPath = Path.Combine(_session.RepoPath, relativePath.Replace('/', '\\'));
-
-                    // Check cache first, fall back to synchronous check (click context, not render)
-                    if (_pathExistsCache.TryGetValue(fullPath, out bool exists))
-                    {
-                        if (exists) return (relativePath, LinkType.Path);
-                    }
-                    else
-                    {
-                        bool found = File.Exists(fullPath) || Directory.Exists(fullPath);
-                        _pathExistsCache[fullPath] = found;
-                        if (found) return (relativePath, LinkType.Path);
-                    }
-                }
-                relPathMatch = relPathMatch.NextMatch();
-            }
-        }
-
-        return (null, LinkType.None);
+        return false;
     }
 
     /// <summary>
@@ -973,6 +1193,8 @@ public class TerminalControl : FrameworkElement
         catch (Exception ex)
         {
             FileLog.Write($"[TerminalControl] OpenInExplorer FAILED: {ex.Message}");
+            MessageBox.Show($"Failed to open in Explorer:\n{ex.Message}",
+                "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -996,6 +1218,8 @@ public class TerminalControl : FrameworkElement
         catch (Exception ex)
         {
             FileLog.Write($"[TerminalControl] OpenInVsCode FAILED: {ex.Message}");
+            MessageBox.Show($"Failed to open in VS Code:\n{ex.Message}",
+                "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -1018,6 +1242,8 @@ public class TerminalControl : FrameworkElement
         catch (Exception ex)
         {
             FileLog.Write($"[TerminalControl] OpenInBrowser FAILED: {ex.Message}");
+            MessageBox.Show($"Failed to open in browser:\n{ex.Message}",
+                "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

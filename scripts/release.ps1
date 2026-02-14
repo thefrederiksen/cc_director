@@ -54,6 +54,14 @@ if ($SelfContained) {
     Write-Host "  Mode: Framework-dependent (.NET 10 runtime required)" -ForegroundColor Yellow
 }
 
+# Clean to force full rebuild
+Write-Host "  Cleaning previous build..." -ForegroundColor Gray
+& dotnet clean $projectPath -c $Configuration -r win-x64 --nologo -v q
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "dotnet clean failed with exit code $LASTEXITCODE"
+    exit 1
+}
+
 # Run dotnet publish
 Write-Host "  Running: dotnet $($publishArgs -join ' ')" -ForegroundColor Gray
 & dotnet @publishArgs

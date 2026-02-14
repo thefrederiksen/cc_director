@@ -116,7 +116,21 @@ public partial class App : Application
             // Don't clear SessionStateStore - sessions.json should persist for crash recovery.
             // On next startup, sessions with ClaudeSessionId can be resumed with --resume flag.
             EmbeddedConsoleHost.DisposeAll();
-            SessionManager?.KillAllSessionsAsync().GetAwaiter().GetResult();
+            if (SessionManager != null)
+            {
+                try
+                {
+                    var killTask = SessionManager.KillAllSessionsAsync();
+                    if (!killTask.Wait(TimeSpan.FromSeconds(5)))
+                    {
+                        FileLog.Write("[App] KillAllSessionsAsync timed out after 5 seconds");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    FileLog.Write($"[App] KillAllSessionsAsync FAILED: {ex.Message}");
+                }
+            }
         }
 
         NulFileWatcher?.Dispose();

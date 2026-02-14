@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CcDirector.Core.Git;
+using CcDirector.Core.Utilities;
 
 namespace CcDirector.Wpf.Controls;
 
@@ -89,7 +90,14 @@ public partial class GitChangesControl : UserControl
 
     private async void PollTimer_Tick(object? sender, EventArgs e)
     {
-        try { await RefreshAsync(); } catch { /* prevent crash from async void */ }
+        try
+        {
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[GitChangesControl] PollTimer_Tick FAILED: {ex.Message}");
+        }
     }
 
     private async void SyncTimer_Tick(object? sender, EventArgs e)
@@ -99,7 +107,10 @@ public partial class GitChangesControl : UserControl
             bool shouldFetch = (DateTime.UtcNow - _lastFetchTime).TotalSeconds >= 60;
             await RefreshSyncAsync(fetch: shouldFetch);
         }
-        catch { /* prevent crash from async void */ }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[GitChangesControl] SyncTimer_Tick FAILED: {ex.Message}");
+        }
     }
 
     private async Task RefreshSyncAsync(bool fetch = false)
@@ -268,32 +279,60 @@ public partial class GitChangesControl : UserControl
 
     internal void FileNode_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 2 && sender is FrameworkElement fe && fe.DataContext is GitFileLeafNode node)
+        try
         {
-            OpenFileInVsCode(node.RelativePath);
-            e.Handled = true;
+            if (e.ClickCount == 2 && sender is FrameworkElement fe && fe.DataContext is GitFileLeafNode node)
+            {
+                OpenFileInVsCode(node.RelativePath);
+                e.Handled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[GitChangesControl] FileNode_MouseLeftButtonDown FAILED: {ex.Message}");
         }
     }
 
     internal void FileNode_OpenInVsCode_Click(object sender, RoutedEventArgs e)
     {
-        if (GetNodeFromMenuItem(sender) is GitFileLeafNode node)
-            OpenFileInVsCode(node.RelativePath);
+        try
+        {
+            if (GetNodeFromMenuItem(sender) is GitFileLeafNode node)
+                OpenFileInVsCode(node.RelativePath);
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[GitChangesControl] FileNode_OpenInVsCode_Click FAILED: {ex.Message}");
+        }
     }
 
     internal void FileNode_CopyFullPath_Click(object sender, RoutedEventArgs e)
     {
-        if (_repoPath != null && GetNodeFromMenuItem(sender) is GitFileLeafNode node)
+        try
         {
-            var fullPath = Path.Combine(_repoPath, node.RelativePath);
-            Clipboard.SetText(fullPath);
+            if (_repoPath != null && GetNodeFromMenuItem(sender) is GitFileLeafNode node)
+            {
+                var fullPath = Path.Combine(_repoPath, node.RelativePath);
+                Clipboard.SetText(fullPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[GitChangesControl] FileNode_CopyFullPath_Click FAILED: {ex.Message}");
         }
     }
 
     internal void FileNode_CopyRelativePath_Click(object sender, RoutedEventArgs e)
     {
-        if (GetNodeFromMenuItem(sender) is GitFileLeafNode node)
-            Clipboard.SetText(node.RelativePath);
+        try
+        {
+            if (GetNodeFromMenuItem(sender) is GitFileLeafNode node)
+                Clipboard.SetText(node.RelativePath);
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[GitChangesControl] FileNode_CopyRelativePath_Click FAILED: {ex.Message}");
+        }
     }
 
     private static GitFileLeafNode? GetNodeFromMenuItem(object sender)
@@ -321,6 +360,9 @@ public partial class GitChangesControl : UserControl
                 CreateNoWindow = true
             });
         }
-        catch { /* VS Code not installed or not in PATH */ }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[GitChangesControl] OpenFileInVsCode FAILED for {relativePath}: {ex.Message}");
+        }
     }
 }

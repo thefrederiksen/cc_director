@@ -1,3 +1,5 @@
+using CcDirector.Core.Utilities;
+
 namespace CcDirector.Core.Memory;
 
 /// <summary>
@@ -13,6 +15,11 @@ public sealed class CircularTerminalBuffer : IDisposable
     private int _writeHead;       // Next write position in the circular buffer
     private long _totalWritten;   // Monotonic counter - never wraps
     private bool _disposed;
+
+    // Lock contention tracking
+    private int _writeLockWaitCount;
+    private int _readLockWaitCount;
+    private DateTime _lastLockLogTime = DateTime.MinValue;
 
     public CircularTerminalBuffer(int capacity = 2_097_152)
     {
@@ -39,7 +46,23 @@ public sealed class CircularTerminalBuffer : IDisposable
     {
         if (data.IsEmpty) return;
 
-        _lock.EnterWriteLock();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        bool acquired = _lock.TryEnterWriteLock(TimeSpan.FromMilliseconds(100));
+        sw.Stop();
+
+        if (!acquired)
+        {
+            _writeLockWaitCount++;
+            FileLog.Write($"[CircularTerminalBuffer] Write lock timeout after 100ms, waitCount={_writeLockWaitCount}, dataLen={data.Length}");
+            // Force acquire (blocking) - we need to log if this happens
+            _lock.EnterWriteLock();
+            FileLog.Write($"[CircularTerminalBuffer] Write lock finally acquired after blocking");
+        }
+        else if (sw.ElapsedMilliseconds > 10)
+        {
+            FileLog.Write($"[CircularTerminalBuffer] Write lock slow: {sw.ElapsedMilliseconds}ms, dataLen={data.Length}");
+        }
+
         try
         {
             // If data is larger than capacity, only keep the last _capacity bytes
@@ -116,7 +139,23 @@ public sealed class CircularTerminalBuffer : IDisposable
     /// </summary>
     public (byte[] Data, long NewPosition) GetWrittenSince(long position)
     {
-        _lock.EnterReadLock();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        bool acquired = _lock.TryEnterReadLock(TimeSpan.FromMilliseconds(100));
+        sw.Stop();
+
+        if (!acquired)
+        {
+            _readLockWaitCount++;
+            FileLog.Write($"[CircularTerminalBuffer] Read lock timeout after 100ms, waitCount={_readLockWaitCount}, pos={position}");
+            // Force acquire (blocking)
+            _lock.EnterReadLock();
+            FileLog.Write($"[CircularTerminalBuffer] Read lock finally acquired after blocking");
+        }
+        else if (sw.ElapsedMilliseconds > 10)
+        {
+            FileLog.Write($"[CircularTerminalBuffer] Read lock slow: {sw.ElapsedMilliseconds}ms");
+        }
+
         try
         {
             if (position >= _totalWritten)
@@ -130,6 +169,7 @@ public sealed class CircularTerminalBuffer : IDisposable
             if (available > _capacity)
             {
                 // Position is stale (data was overwritten). Return full buffer.
+                FileLog.Write($"[CircularTerminalBuffer] Position stale, returning full dump: pos={position}, total={_totalWritten}, available={available}");
                 var dump = DumpAllInternal();
                 return (dump, _totalWritten);
             }

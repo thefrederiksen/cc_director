@@ -1,4 +1,5 @@
 using System.Windows.Media;
+using CcDirector.Core.Utilities;
 
 namespace CcDirector.Wpf.Helpers;
 
@@ -109,8 +110,16 @@ public class AnsiParser
 
     public bool IsCursorVisible => _cursorVisible;
 
+    // Track parsing performance
+    private int _slowParseCount;
+    private DateTime _lastSlowParseLogTime = DateTime.MinValue;
+    private long _totalBytesParsed;
+
     public void Parse(byte[] data)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        _totalBytesParsed += data.Length;
+
         foreach (byte b in data)
         {
             switch (_state)
@@ -127,6 +136,18 @@ public class AnsiParser
                 case ParserState.OscString:
                     HandleOsc(b);
                     break;
+            }
+        }
+
+        sw.Stop();
+        if (sw.ElapsedMilliseconds > 20 || data.Length > 50000)
+        {
+            _slowParseCount++;
+            if ((DateTime.UtcNow - _lastSlowParseLogTime).TotalSeconds >= 1)
+            {
+                FileLog.Write($"[AnsiParser] Parse slow: {sw.ElapsedMilliseconds}ms, bytes={data.Length}, totalParsed={_totalBytesParsed}, slowCount={_slowParseCount}");
+                _lastSlowParseLogTime = DateTime.UtcNow;
+                _slowParseCount = 0;
             }
         }
     }

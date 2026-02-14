@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CC Director - Feature Documentation</title>
+    <style>
+        :root {
+            --bg-primary: #1e1e1e;
+            --bg-secondary: #252526;
+            --bg-tertiary: #2d2d30;
+            --text-primary: #d4d4d4;
+            --text-secondary: #9cdcfe;
+            --text-muted: #808080;
+            --accent-blue: #569cd6;
+            --accent-green: #4ec9b0;
+            --accent-orange: #ce9178;
+            --accent-purple: #c586c0;
+            --accent-yellow: #dcdcaa;
+            --border-color: #3c3c3c;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            padding: 80px 0;
+            text-align: center;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 300;
+            margin-bottom: 16px;
+            color: #fff;
+        }
+
+        .hero h1 span {
+            color: var(--accent-blue);
+            font-weight: 600;
+        }
+
+        .hero .tagline {
+            font-size: 1.4rem;
+            color: var(--text-muted);
+            margin-bottom: 32px;
+        }
+
+        .hero .version {
+            display: inline-block;
+            background: var(--accent-blue);
+            color: #fff;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        /* Navigation */
+        nav {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        nav ul {
+            display: flex;
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            overflow-x: auto;
+        }
+
+        nav li a {
+            display: block;
+            padding: 16px 20px;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        nav li a:hover {
+            color: var(--text-primary);
+            background: var(--bg-tertiary);
+            border-bottom-color: var(--accent-blue);
+        }
+
+        /* Why Section */
+        .why-section {
+            padding: 80px 0;
+            background: var(--bg-secondary);
+        }
+
+        .why-section h2 {
+            text-align: center;
+            font-size: 2.2rem;
+            margin-bottom: 48px;
+            color: var(--accent-green);
+        }
+
+        .why-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 32px;
+        }
+
+        .why-card {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 32px;
+            border: 1px solid var(--border-color);
+        }
+
+        .why-card h3 {
+            color: var(--accent-blue);
+            font-size: 1.2rem;
+            margin-bottom: 12px;
+        }
+
+        .why-card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        /* Feature Sections */
+        .feature-section {
+            padding: 64px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .feature-section:nth-child(even) {
+            background: var(--bg-secondary);
+        }
+
+        .feature-section h2 {
+            font-size: 1.8rem;
+            margin-bottom: 32px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid var(--accent-blue);
+            display: inline-block;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 24px;
+        }
+
+        .feature-card {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 24px;
+            border: 1px solid var(--border-color);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        .feature-card h3 {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .feature-card h3::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--accent-green);
+            border-radius: 50%;
+        }
+
+        .feature-card p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+        }
+
+        .feature-card ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .feature-card li {
+            padding: 4px 0 4px 20px;
+            position: relative;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .feature-card li::before {
+            content: '->';
+            position: absolute;
+            left: 0;
+            color: var(--accent-orange);
+        }
+
+        /* Status Badges */
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-right: 4px;
+        }
+
+        .badge-green { background: #2d4f3c; color: #4ec9b0; }
+        .badge-blue { background: #1e3a5f; color: #569cd6; }
+        .badge-orange { background: #5f3a1e; color: #ce9178; }
+        .badge-red { background: #5f1e1e; color: #f14c4c; }
+        .badge-gray { background: #3c3c3c; color: #808080; }
+
+        /* Keyboard Shortcuts Table */
+        .shortcuts-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 16px;
+        }
+
+        .shortcuts-table th,
+        .shortcuts-table td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .shortcuts-table th {
+            background: var(--bg-tertiary);
+            color: var(--accent-blue);
+            font-weight: 600;
+        }
+
+        .shortcuts-table tr:hover td {
+            background: var(--bg-tertiary);
+        }
+
+        kbd {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-family: 'Cascadia Code', 'Consolas', monospace;
+            font-size: 0.85rem;
+            color: var(--accent-yellow);
+        }
+
+        /* Activity States */
+        .activity-states {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .activity-state {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        .state-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .state-starting { background: #808080; }
+        .state-idle { background: #4ec9b0; }
+        .state-working { background: #569cd6; }
+        .state-waiting { background: #4ec9b0; }
+        .state-permission { background: #f14c4c; }
+        .state-exited { background: #3c3c3c; }
+
+        /* Footer */
+        footer {
+            background: var(--bg-secondary);
+            padding: 48px 0;
+            text-align: center;
+            border-top: 1px solid var(--border-color);
+        }
+
+        footer p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        footer .tech-stack {
+            margin-top: 16px;
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        footer .tech-stack span {
+            color: var(--accent-blue);
+            font-size: 0.85rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2.2rem;
+            }
+
+            .feature-grid {
+                grid-template-columns: 1fr;
+            }
+
+            nav ul {
+                flex-wrap: wrap;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Hero Section -->
+    <header class="hero">
+        <div class="container">
+            <h1>CC <span>Director</span></h1>
+            <p class="tagline">Multi-Session Management for Claude Code</p>
+            <span class="version">v2.0</span>
+        </div>
+    </header>
+
+    <!-- Navigation -->
+    <nav>
+        <div class="container">
+            <ul>
+                <li><a href="#why">Why CC Director</a></li>
+                <li><a href="#sessions">Session Management</a></li>
+                <li><a href="#terminal">Terminal</a></li>
+                <li><a href="#git">Git Integration</a></li>
+                <li><a href="#activity">Activity Tracking</a></li>
+                <li><a href="#hooks">Hook System</a></li>
+                <li><a href="#shortcuts">Shortcuts</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Why Section -->
+    <section class="why-section" id="why">
+        <div class="container">
+            <h2>Why Use CC Director?</h2>
+            <div class="why-grid">
+                <div class="why-card">
+                    <h3>Multiple Projects, One Window</h3>
+                    <p>Run multiple Claude Code sessions simultaneously across different repositories. Switch between projects instantly without losing context or terminal history.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Real Console, Not Emulation</h3>
+                    <p>Uses native Windows ConPTY for true console compatibility. Full support for colors, cursor control, and interactive programs - no terminal emulation quirks.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Sessions Survive Restarts</h3>
+                    <p>Close CC Director and your Claude sessions keep running. Reopen later and pick up exactly where you left off with full session recovery.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Real-Time Activity Monitoring</h3>
+                    <p>See exactly what Claude is doing at a glance. Color-coded status badges show when Claude is working, waiting for input, or needs permission.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Git-Aware Workflows</h3>
+                    <p>Built-in source control panel shows staged/unstaged changes, branch status, and sync state. Click files to open in VS Code instantly.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Enterprise-Grade Logging</h3>
+                    <p>Comprehensive diagnostic logging for debugging and auditing. Every operation is tracked with timestamps and context for full observability.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Session Management -->
+    <section class="feature-section" id="sessions">
+        <div class="container">
+            <h2>Session Management</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>Multi-Session Support</h3>
+                    <p>Run multiple Claude Code sessions simultaneously, each in its own embedded console window.</p>
+                    <ul>
+                        <li>Session sidebar with status indicators</li>
+                        <li>Quick-switch between sessions</li>
+                        <li>Drag-and-drop reordering</li>
+                        <li>Custom naming and color-coding</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Session Persistence</h3>
+                    <p>Sessions survive application restarts with full state recovery.</p>
+                    <ul>
+                        <li>Automatic orphan process detection</li>
+                        <li>Resume previous conversations</li>
+                        <li>Persisted names and colors</li>
+                        <li>Choose to keep sessions running on exit</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Resume Previous Sessions</h3>
+                    <p>Browse and resume any previous Claude Code conversation.</p>
+                    <ul>
+                        <li>Project name and path display</li>
+                        <li>Message count per session</li>
+                        <li>Time since last activity</li>
+                        <li>Conversation summary preview</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Session Actions</h3>
+                    <p>Right-click any session for quick actions.</p>
+                    <ul>
+                        <li>Rename with custom name</li>
+                        <li>Open repository in Explorer</li>
+                        <li>Open repository in VS Code</li>
+                        <li>View GitHub Issues</li>
+                        <li>Close session with confirmation</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Terminal Features -->
+    <section class="feature-section" id="terminal">
+        <div class="container">
+            <h2>Terminal Features</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>Native Console Integration</h3>
+                    <p>Full Windows ConPTY support for true console compatibility.</p>
+                    <ul>
+                        <li>Real console rendering (not emulation)</li>
+                        <li>Full ANSI/VT100 color support</li>
+                        <li>Cursor control and positioning</li>
+                        <li>Interactive program support</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Scrollback History</h3>
+                    <p>Access 1000 lines of terminal history with smooth scrolling.</p>
+                    <ul>
+                        <li>Mouse wheel scrolling</li>
+                        <li>Scrollbar for navigation</li>
+                        <li>Auto-scroll on new content</li>
+                        <li>Text selection support</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Link Detection</h3>
+                    <p>Clickable paths and URLs in terminal output.</p>
+                    <ul>
+                        <li>Windows paths (C:\path\to\file)</li>
+                        <li>Unix paths (/path/to/file)</li>
+                        <li>Relative paths (./folder/file)</li>
+                        <li>URLs (https://...)</li>
+                        <li>Right-click to open or copy</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Prompt Input Bar</h3>
+                    <p>Multi-line text input for sending prompts to Claude.</p>
+                    <ul>
+                        <li>Expandable text area</li>
+                        <li>Ctrl+Enter to submit</li>
+                        <li>Auto-focus after sending</li>
+                        <li>Line-ending normalization</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Git Integration -->
+    <section class="feature-section" id="git">
+        <div class="container">
+            <h2>Git Integration</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>Source Control Panel</h3>
+                    <p>Real-time view of repository status and changes.</p>
+                    <ul>
+                        <li>Current branch display</li>
+                        <li>Staged changes with count</li>
+                        <li>Unstaged changes with count</li>
+                        <li>File status indicators (M, A, D, R, ?)</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Sync Status</h3>
+                    <p>See how your branch compares to remote.</p>
+                    <ul>
+                        <li><span class="badge badge-green">Ahead N</span> commits to push</li>
+                        <li><span class="badge badge-orange">Behind N</span> commits to pull</li>
+                        <li><span class="badge badge-blue">Behind main</span> indicator</li>
+                        <li>No upstream warning</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Repository Management</h3>
+                    <p>Manage your project repositories in one place.</p>
+                    <ul>
+                        <li>Clone from URL or GitHub</li>
+                        <li>Add existing repositories</li>
+                        <li>Create new repositories</li>
+                        <li>Launch sessions from any repo</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>File Operations</h3>
+                    <p>Quick access to changed files.</p>
+                    <ul>
+                        <li>Click to open in VS Code</li>
+                        <li>Copy full path</li>
+                        <li>Copy relative path</li>
+                        <li>Folder tree navigation</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Activity Tracking -->
+    <section class="feature-section" id="activity">
+        <div class="container">
+            <h2>Real-Time Activity Tracking</h2>
+            <p style="margin-bottom: 24px; color: var(--text-muted);">
+                Know exactly what Claude is doing at all times with color-coded activity states.
+            </p>
+            <div class="activity-states">
+                <div class="activity-state">
+                    <span class="state-indicator state-starting"></span>
+                    <span>Starting</span>
+                </div>
+                <div class="activity-state">
+                    <span class="state-indicator state-idle"></span>
+                    <span>Idle</span>
+                </div>
+                <div class="activity-state">
+                    <span class="state-indicator state-working"></span>
+                    <span>Working</span>
+                </div>
+                <div class="activity-state">
+                    <span class="state-indicator state-waiting"></span>
+                    <span>Your Turn</span>
+                </div>
+                <div class="activity-state">
+                    <span class="state-indicator state-permission"></span>
+                    <span>Needs Permission</span>
+                </div>
+                <div class="activity-state">
+                    <span class="state-indicator state-exited"></span>
+                    <span>Exited</span>
+                </div>
+            </div>
+
+            <div class="feature-grid" style="margin-top: 32px;">
+                <div class="feature-card">
+                    <h3>Session Header Banner</h3>
+                    <p>Active session displays prominently with activity state, message count, and conversation summary.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Sidebar Indicators</h3>
+                    <p>All sessions show their current state in the sidebar with color-coded borders and badges.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Hook System -->
+    <section class="feature-section" id="hooks">
+        <div class="container">
+            <h2>Hook Integration System</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>Automatic Hook Installation</h3>
+                    <p>CC Director automatically configures Claude Code hooks for seamless integration.</p>
+                    <ul>
+                        <li>PowerShell relay script</li>
+                        <li>Named pipe IPC communication</li>
+                        <li>Auto-routing to correct session</li>
+                        <li>No manual configuration needed</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Captured Events</h3>
+                    <p>14+ hook event types captured for full observability.</p>
+                    <ul>
+                        <li>Session start/end lifecycle</li>
+                        <li>User prompt submissions</li>
+                        <li>Tool use events</li>
+                        <li>Permission requests</li>
+                        <li>Subagent activity</li>
+                        <li>Task completions</li>
+                    </ul>
+                </div>
+                <div class="feature-card">
+                    <h3>Pipe Messages Panel</h3>
+                    <p>Optional side panel shows all hook events in real-time.</p>
+                    <ul>
+                        <li>Timestamp and event name</li>
+                        <li>Session ID identification</li>
+                        <li>Event details (tool name, message)</li>
+                        <li>Color-coded event types</li>
+                        <li>Clear button to reset log</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Keyboard Shortcuts -->
+    <section class="feature-section" id="shortcuts">
+        <div class="container">
+            <h2>Keyboard Shortcuts</h2>
+            <table class="shortcuts-table">
+                <thead>
+                    <tr>
+                        <th>Shortcut</th>
+                        <th>Action</th>
+                        <th>Context</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><kbd>Ctrl</kbd> + <kbd>Enter</kbd></td>
+                        <td>Send prompt to Claude</td>
+                        <td>Prompt input bar</td>
+                    </tr>
+                    <tr>
+                        <td><kbd>Ctrl</kbd> + <kbd>C</kbd></td>
+                        <td>Copy selection or send interrupt</td>
+                        <td>Terminal (with selection copies, without sends SIGINT)</td>
+                    </tr>
+                    <tr>
+                        <td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd></td>
+                        <td>Force copy to clipboard</td>
+                        <td>Terminal</td>
+                    </tr>
+                    <tr>
+                        <td><kbd>Ctrl</kbd> + <kbd>D</kbd></td>
+                        <td>Send EOF signal</td>
+                        <td>Terminal</td>
+                    </tr>
+                    <tr>
+                        <td><kbd>Ctrl</kbd> + <kbd>Z</kbd></td>
+                        <td>Send suspend signal</td>
+                        <td>Terminal</td>
+                    </tr>
+                    <tr>
+                        <td><kbd>Ctrl</kbd> + <kbd>L</kbd></td>
+                        <td>Clear screen</td>
+                        <td>Terminal</td>
+                    </tr>
+                    <tr>
+                        <td><kbd>Shift</kbd> + <kbd>Tab</kbd></td>
+                        <td>Reverse tab (mode cycling)</td>
+                        <td>Terminal</td>
+                    </tr>
+                    <tr>
+                        <td>Right-click</td>
+                        <td>Copy selection to clipboard</td>
+                        <td>Terminal (with selection)</td>
+                    </tr>
+                    <tr>
+                        <td>Mouse wheel</td>
+                        <td>Scroll terminal history</td>
+                        <td>Terminal</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Additional Features -->
+    <section class="feature-section">
+        <div class="container">
+            <h2>Additional Features</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>Windows Terminal Detection</h3>
+                    <p>Detects when Windows Terminal is set as default and provides option to switch to compatible Console Host.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>NUL File Watcher</h3>
+                    <p>Background monitor that auto-deletes problematic NUL files that can corrupt git repositories on Windows.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Configuration Management</h3>
+                    <p>Customizable settings including Claude path, buffer sizes, shutdown timeouts, and repository lists.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Diagnostic Logging</h3>
+                    <p>Enterprise-grade logging to %LOCALAPPDATA%\CcDirector\logs with full operation tracing.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>GitHub Integration</h3>
+                    <p>Browse and clone from your GitHub repositories. View and open GitHub Issues directly from sessions.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Dark Theme UI</h3>
+                    <p>VS Code-inspired dark theme optimized for developer comfort during long coding sessions.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="container">
+            <p>CC Director - Multi-Session Management for Claude Code</p>
+            <div class="tech-stack">
+                <span>.NET 10</span>
+                <span>WPF</span>
+                <span>ConPTY</span>
+                <span>Named Pipes IPC</span>
+                <span>PowerShell Hooks</span>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

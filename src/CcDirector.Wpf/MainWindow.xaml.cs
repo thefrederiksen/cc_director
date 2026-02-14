@@ -97,12 +97,18 @@ public partial class MainWindow : Window
 
         var app = (App)Application.Current;
 
+        // Unsubscribe event handlers to prevent memory leaks
+        if (app.EventRouter != null)
+            app.EventRouter.OnRawMessage -= OnPipeMessageReceived;
+        _sessionManager.OnClaudeSessionRegistered -= OnClaudeSessionRegistered;
+
         // In sandbox mode, skip exit dialog and just kill all sessions
         if (app.SandboxMode)
         {
             FileLog.Write("[MainWindow] Sandbox mode: closing without dialog");
             DetachTerminal();
-            foreach (var vm in _sessions)
+            var sessionsSnapshot = _sessions.ToList();
+            foreach (var vm in sessionsSnapshot)
             {
                 _ = vm.Session.KillAsync();
             }
@@ -136,7 +142,8 @@ public partial class MainWindow : Window
                 });
 
                 DetachTerminal();
-                foreach (var vm in _sessions)
+                var sessionsSnapshot = _sessions.ToList();
+                foreach (var vm in sessionsSnapshot)
                 {
                     if (vm.Session.Backend is EmbeddedBackend eb)
                         eb.Detach();
@@ -183,7 +190,7 @@ public partial class MainWindow : Window
             if (System.IO.File.Exists(exePath))
             {
                 var buildTime = System.IO.File.GetLastWriteTime(exePath);
-                BuildInfoText.Text = $"Build: {buildTime:HH:mm:ss}";
+                BuildInfoText.Text = $"Build: {buildTime:yyyy-MM-dd HH:mm}";
                 BuildInfoText.ToolTip = $"Built: {buildTime:yyyy-MM-dd HH:mm:ss}\nPath: {exePath}";
             }
             else
@@ -193,12 +200,12 @@ public partial class MainWindow : Window
                 if (System.IO.File.Exists(dllPath))
                 {
                     var buildTime = System.IO.File.GetLastWriteTime(dllPath);
-                    BuildInfoText.Text = $"Build: {buildTime:HH:mm:ss}";
+                    BuildInfoText.Text = $"Build: {buildTime:yyyy-MM-dd HH:mm}";
                     BuildInfoText.ToolTip = $"Built: {buildTime:yyyy-MM-dd HH:mm:ss}\nPath: {dllPath}";
                 }
                 else
                 {
-                    BuildInfoText.Text = $"Build: {DateTime.Now:HH:mm:ss}";
+                    BuildInfoText.Text = $"Build: {DateTime.Now:yyyy-MM-dd HH:mm}";
                 }
             }
         }
