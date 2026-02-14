@@ -190,7 +190,7 @@ public partial class MainWindow : Window
             if (System.IO.File.Exists(exePath))
             {
                 var buildTime = System.IO.File.GetLastWriteTime(exePath);
-                BuildInfoText.Text = $"Build: {buildTime:yyyy-MM-dd HH:mm}";
+                BuildInfoText.Text = $"Build: {buildTime:HH:mm:ss}";
                 BuildInfoText.ToolTip = $"Built: {buildTime:yyyy-MM-dd HH:mm:ss}\nPath: {exePath}";
             }
             else
@@ -200,12 +200,12 @@ public partial class MainWindow : Window
                 if (System.IO.File.Exists(dllPath))
                 {
                     var buildTime = System.IO.File.GetLastWriteTime(dllPath);
-                    BuildInfoText.Text = $"Build: {buildTime:yyyy-MM-dd HH:mm}";
+                    BuildInfoText.Text = $"Build: {buildTime:HH:mm:ss}";
                     BuildInfoText.ToolTip = $"Built: {buildTime:yyyy-MM-dd HH:mm:ss}\nPath: {dllPath}";
                 }
                 else
                 {
-                    BuildInfoText.Text = $"Build: {DateTime.Now:yyyy-MM-dd HH:mm}";
+                    BuildInfoText.Text = $"Build: {DateTime.Now:HH:mm:ss}";
                 }
             }
         }
@@ -412,6 +412,9 @@ public partial class MainWindow : Window
                 }
                 _sessionManager.RemoveSession(sessionId);
                 FileLog.Write($"[MainWindow] MenuCloseSession_Click: background cleanup complete for {sessionId}");
+                // Re-persist now that session is removed from manager;
+                // this supersedes the earlier debounced persist that may still see the session.
+                _ = Dispatcher.BeginInvoke(PersistSessionState);
             }
             catch (Exception ex)
             {
@@ -912,6 +915,8 @@ public partial class MainWindow : Window
 
     private void PersistSessionState()
     {
+        Debug.Assert(Dispatcher.CheckAccess(), "PersistSessionState must be called on the UI thread");
+
         // Cancel any pending debounce
         _persistDebounceCts?.Cancel();
         _persistDebounceCts = new CancellationTokenSource();
@@ -1012,7 +1017,9 @@ public partial class MainWindow : Window
     {
         // Persist session state so ClaudeSessionId is saved for crash recovery
         FileLog.Write($"[MainWindow] Claude session registered: {claudeSessionId} for {session.RepoPath}");
-        PersistSessionState();
+        // This event can fire from a non-UI thread; PersistSessionState touches _persistDebounceCts
+        // which must only be accessed on the UI thread.
+        Dispatcher.BeginInvoke(PersistSessionState);
     }
 
     private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)

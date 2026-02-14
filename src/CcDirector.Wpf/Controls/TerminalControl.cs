@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -70,12 +72,6 @@ public class TerminalControl : FrameworkElement
     private readonly record struct LinkRegion(Rect Bounds, string Text, LinkType Type);
     private readonly List<LinkRegion> _linkRegions = new();
 
-    // DISABLED: Link detection caching - link detection is disabled for performance
-    // These will be used for on-demand link detection in future enhancement
-    // private long _lastLinkDetectionBufferPos = -1;
-    // private int _lastLinkDetectionScrollOffset = -1;
-    // private int _lastLinkDetectionRows = -1;
-
     private Session? _session;
     private long _bufferPosition;
     private DispatcherTimer? _pollTimer;
@@ -101,6 +97,10 @@ public class TerminalControl : FrameworkElement
     private ContextMenu? _linkContextMenu;
     private string? _detectedLink;
     private LinkType _detectedLinkType;
+
+    // Path existence cache - avoids disk I/O in OnRender
+    private readonly ConcurrentDictionary<string, bool> _pathExistsCache = new();
+    private int _pathCacheInvalidateNeeded;
 
     /// <summary>Raised when scroll position or scrollback changes.</summary>
     public event EventHandler? ScrollChanged;
@@ -153,11 +153,7 @@ public class TerminalControl : FrameworkElement
         _bufferPosition = 0;
         _scrollOffset = 0;
         _scrollback.Clear();
-
-        // DISABLED: Link detection cache reset - link detection is disabled
-        // _lastLinkDetectionBufferPos = -1;
-        // _lastLinkDetectionScrollOffset = -1;
-        // _lastLinkDetectionRows = -1;
+        _pathExistsCache.Clear();
 
         RecalculateGridSize();
         InitializeCells();
@@ -188,43 +184,34 @@ public class TerminalControl : FrameworkElement
 
     public void Detach()
     {
-        var sessionId = _session?.Id;
-        FileLog.Write($"[TerminalControl] Detach: sessionId={sessionId}");
+        FileLog.Write($"[TerminalControl] Detach: sessionId={_session?.Id}");
 
         _pollTimer?.Stop();
         _pollTimer = null;
         _session = null;
         _parser = null;
         _linkRegions.Clear();
+        _pathExistsCache.Clear();
     }
-
-    // Track polling performance
-    private int _slowPollCount;
-    private DateTime _lastSlowPollLogTime = DateTime.MinValue;
-    private long _totalBytesReceived;
 
     private void PollTimer_Tick(object? sender, EventArgs e)
     {
-        var pollSw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             if (_session?.Buffer == null) return;
 
-            var bufferSw = System.Diagnostics.Stopwatch.StartNew();
             var (data, newPos) = _session.Buffer.GetWrittenSince(_bufferPosition);
-            bufferSw.Stop();
-
             if (data.Length > 0)
             {
-                _totalBytesReceived += data.Length;
                 _bufferPosition = newPos;
-
-                var parseSw = System.Diagnostics.Stopwatch.StartNew();
                 _parser?.Parse(data);
-                parseSw.Stop();
 
-                // REMOVED: ClearSelection() - let selection persist during output
-                // Users can now select text while Claude is generating
+                // Clear path cache so links re-evaluate with new terminal content
+                _pathExistsCache.Clear();
+                Interlocked.Exchange(ref _pathCacheInvalidateNeeded, 0);
+
+                // Let selection persist during output so users can
+                // select text while Claude is generating
 
                 // Only auto-scroll if user hasn't manually scrolled up
                 // This lets users review history while output continues
@@ -233,73 +220,26 @@ public class TerminalControl : FrameworkElement
 
                 InvalidateVisual();
                 ScrollChanged?.Invoke(this, EventArgs.Empty);
-
-                // Log large data chunks or slow parsing
-                if (parseSw.ElapsedMilliseconds > 10 || data.Length > 10000)
-                {
-                    FileLog.Write($"[TerminalControl] PollTimer_Tick: bytes={data.Length}, bufferRead={bufferSw.ElapsedMilliseconds}ms, parse={parseSw.ElapsedMilliseconds}ms, totalBytes={_totalBytesReceived}");
-                }
             }
         }
         catch (Exception ex)
         {
             FileLog.Write($"[TerminalControl] PollTimer_Tick FAILED: {ex.Message}");
         }
-        finally
-        {
-            pollSw.Stop();
-            if (pollSw.ElapsedMilliseconds > 30)
-            {
-                _slowPollCount++;
-                if ((DateTime.UtcNow - _lastSlowPollLogTime).TotalSeconds >= 1)
-                {
-                    FileLog.Write($"[TerminalControl] PollTimer_Tick SLOW: {pollSw.ElapsedMilliseconds}ms, slowCount={_slowPollCount}");
-                    _lastSlowPollLogTime = DateTime.UtcNow;
-                    _slowPollCount = 0;
-                }
-            }
-        }
     }
-
-    // Track OnRender performance - log if consistently slow
-    private int _slowRenderCount;
-    private DateTime _lastSlowRenderLogTime = DateTime.MinValue;
 
     protected override void OnRender(DrawingContext drawingContext)
     {
-        var renderSw = System.Diagnostics.Stopwatch.StartNew();
+        // Reset so background path checks can schedule one more InvalidateVisual
+        Interlocked.Exchange(ref _pathCacheInvalidateNeeded, 0);
 
         var bg = GetCachedBrush(Color.FromRgb(30, 30, 30));
         drawingContext.DrawRectangle(bg, null, new Rect(0, 0, ActualWidth, ActualHeight));
 
+        // Clear link regions for fresh hit-testing
+        _linkRegions.Clear();
+
         if (_parser == null) return;
-
-        // Protect against division by zero if font metrics not yet measured
-        if (_cellWidth <= 0 || _cellHeight <= 0) return;
-
-        // DISABLED: Link detection during render causes performance issues
-        // Links will be detected on-demand via right-click context menu (future enhancement)
-        // See: docs/STATUS-TerminalPerformance.md for details
-        /*
-        // Only recalculate links when visible content has changed
-        // This prevents running regex 120 times/second (4 patterns x 30 rows x ~60fps)
-        bool needsLinkRecalc =
-            _lastLinkDetectionBufferPos != _bufferPosition ||
-            _lastLinkDetectionScrollOffset != _scrollOffset ||
-            _lastLinkDetectionRows != _rows;
-
-        long linkDetectMs = 0;
-        if (needsLinkRecalc)
-        {
-            var linkSw = System.Diagnostics.Stopwatch.StartNew();
-            _linkRegions.Clear();
-            DetectAllLinks();
-            _lastLinkDetectionBufferPos = _bufferPosition;
-            _lastLinkDetectionScrollOffset = _scrollOffset;
-            _lastLinkDetectionRows = _rows;
-            linkSw.Stop();
-            linkDetectMs = linkSw.ElapsedMilliseconds;
-        }
 
         // Link color - light blue like web links
         var linkColor = Color.FromRgb(0x6C, 0xB6, 0xFF);
@@ -308,28 +248,31 @@ public class TerminalControl : FrameworkElement
         // Underline pen for links
         var underlinePen = new Pen(linkBrush, 1);
         underlinePen.Freeze();
-        */
 
         for (int row = 0; row < _rows; row++)
         {
-            // DISABLED: Link column lookup - see above
-            /*
-            // Build column-to-link lookup from cached _linkRegions for this row
-            var columnToLink = new Dictionary<int, LinkMatch>();
-            foreach (var region in _linkRegions)
-            {
-                // Check if this region is on the current row
-                int regionRow = (int)(region.Bounds.Y / _cellHeight);
-                if (regionRow != row) continue;
+            // Get line text and find link matches for this row
+            string lineText = GetLineText(row);
+            var linkMatches = FindAllLinkMatches(lineText);
 
-                int startCol = (int)(region.Bounds.X / _cellWidth);
-                int endCol = startCol + (int)(region.Bounds.Width / _cellWidth);
-                for (int c = startCol; c < endCol && c < _cols; c++)
+            // Create a lookup for which columns are part of a link
+            var columnToLink = new Dictionary<int, LinkMatch>();
+            foreach (var match in linkMatches)
+            {
+                for (int c = match.StartCol; c < match.EndCol && c < _cols; c++)
                 {
-                    columnToLink[c] = new LinkMatch(startCol, endCol, region.Text, region.Type);
+                    columnToLink[c] = match;
                 }
+
+                // Store link region for hover detection
+                double linkX = match.StartCol * _cellWidth;
+                double linkY = row * _cellHeight;
+                double linkWidth = (match.EndCol - match.StartCol) * _cellWidth;
+                _linkRegions.Add(new LinkRegion(
+                    new Rect(linkX, linkY, linkWidth, _cellHeight),
+                    match.Text,
+                    match.Type));
             }
-            */
 
             for (int col = 0; col < _cols; col++)
             {
@@ -378,13 +321,11 @@ public class TerminalControl : FrameworkElement
                 char ch = cell.Character;
                 if (ch == '\0' || ch == ' ') continue;
 
-                // DISABLED: Link detection - links no longer highlighted during render
-                // bool isLink = columnToLink.ContainsKey(col);
-                // var fg = isLink ? linkColor : (cell.Foreground == default ? Colors.LightGray : cell.Foreground);
-                // var brush = isLink ? linkBrush : GetCachedBrush(fg);
+                // Determine if this character is part of a link
+                bool isLink = columnToLink.ContainsKey(col);
 
-                var fg = cell.Foreground == default ? Colors.LightGray : cell.Foreground;
-                var brush = GetCachedBrush(fg);
+                var fg = isLink ? linkColor : (cell.Foreground == default ? Colors.LightGray : cell.Foreground);
+                var brush = isLink ? linkBrush : GetCachedBrush(fg);
 
                 var tf = GetCachedTypeface(cell.Bold, cell.Italic);
 
@@ -402,8 +343,6 @@ public class TerminalControl : FrameworkElement
 
                 drawingContext.DrawText(formattedText, new Point(charX, charY));
 
-                // DISABLED: Link underlines - see above
-                /*
                 // Draw underline for links
                 if (isLink)
                 {
@@ -412,7 +351,6 @@ public class TerminalControl : FrameworkElement
                         new Point(charX, underlineY),
                         new Point(charX + _cellWidth, underlineY));
                 }
-                */
             }
         }
 
@@ -446,20 +384,6 @@ public class TerminalControl : FrameworkElement
                 drawingContext.DrawRectangle(cursorBrush, null,
                     new Rect(cursorCol * _cellWidth, cursorRow * _cellHeight,
                         _cellWidth, _cellHeight));
-            }
-        }
-
-        // Performance logging
-        renderSw.Stop();
-        if (renderSw.ElapsedMilliseconds > 50)
-        {
-            _slowRenderCount++;
-            // Only log once per second to avoid flooding
-            if ((DateTime.UtcNow - _lastSlowRenderLogTime).TotalSeconds >= 1)
-            {
-                FileLog.Write($"[TerminalControl] OnRender SLOW: {renderSw.ElapsedMilliseconds}ms (rows={_rows}, slowCount={_slowRenderCount})");
-                _lastSlowRenderLogTime = DateTime.UtcNow;
-                _slowRenderCount = 0;
             }
         }
     }
@@ -501,9 +425,6 @@ public class TerminalControl : FrameworkElement
 
             var pos = e.GetPosition(this);
 
-            // DISABLED: Link hit-testing - links no longer detected during render
-            // On-demand link detection will be added via right-click context menu
-            /*
             // Check if clicking on a link - show context menu
             foreach (var region in _linkRegions)
             {
@@ -514,9 +435,8 @@ public class TerminalControl : FrameworkElement
                     return;
                 }
             }
-            */
 
-            // Start selection
+            // Not clicking on a link - start selection
             var cell = HitTestCell(pos);
 
             _selectionStart = cell;
@@ -540,8 +460,6 @@ public class TerminalControl : FrameworkElement
 
         var pos = e.GetPosition(this);
 
-        // DISABLED: Link hover cursor - links no longer detected during render
-        /*
         // Update cursor based on whether hovering over a link
         bool overLink = false;
         foreach (var region in _linkRegions)
@@ -553,8 +471,6 @@ public class TerminalControl : FrameworkElement
             }
         }
         Cursor = overLink ? Cursors.Hand : Cursors.IBeam;
-        */
-        Cursor = Cursors.IBeam;
 
         // Handle selection dragging
         if (!_isSelecting) return;
@@ -690,15 +606,7 @@ public class TerminalControl : FrameworkElement
 
     private void RecalculateGridSize()
     {
-        if (ActualWidth <= 0 || ActualHeight <= 0)
-        {
-            _cols = DefaultCols;
-            _rows = DefaultRows;
-            return;
-        }
-
-        // Protect against division by zero if font metrics not yet measured
-        if (_cellWidth <= 0 || _cellHeight <= 0)
+        if (ActualWidth <= 0 || ActualHeight <= 0 || _cellWidth <= 0 || _cellHeight <= 0)
         {
             _cols = DefaultCols;
             _rows = DefaultRows;
@@ -743,7 +651,6 @@ public class TerminalControl : FrameworkElement
     /// </summary>
     private (int col, int row) HitTestCell(Point position)
     {
-        // Protect against division by zero
         if (_cellWidth <= 0 || _cellHeight <= 0)
             return (0, 0);
 
@@ -806,47 +713,12 @@ public class TerminalControl : FrameworkElement
     }
 
     /// <summary>
-    /// Detect all links in visible rows and populate _linkRegions.
-    /// Called only when visible content changes (buffer position, scroll, or resize).
-    /// </summary>
-    private void DetectAllLinks()
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        int totalMatches = 0;
-
-        for (int row = 0; row < _rows; row++)
-        {
-            string lineText = GetLineText(row);
-            var linkMatches = FindAllLinkMatches(lineText);
-
-            foreach (var match in linkMatches)
-            {
-                double linkX = match.StartCol * _cellWidth;
-                double linkY = row * _cellHeight;
-                double linkWidth = (match.EndCol - match.StartCol) * _cellWidth;
-                _linkRegions.Add(new LinkRegion(
-                    new Rect(linkX, linkY, linkWidth, _cellHeight),
-                    match.Text,
-                    match.Type));
-                totalMatches++;
-            }
-        }
-
-        sw.Stop();
-        if (sw.ElapsedMilliseconds > 10)
-        {
-            FileLog.Write($"[TerminalControl] DetectAllLinks: rows={_rows}, matches={totalMatches}, elapsed={sw.ElapsedMilliseconds}ms");
-        }
-    }
-
-    /// <summary>
     /// Represents a detected link match with its column range.
     /// </summary>
     private readonly record struct LinkMatch(int StartCol, int EndCol, string Text, LinkType Type);
 
     /// <summary>
     /// Find all link matches (paths and URLs) in a line of text.
-    /// Each regex has a 50ms timeout to prevent catastrophic backtracking hangs.
     /// </summary>
     private List<LinkMatch> FindAllLinkMatches(string lineText)
     {
@@ -854,144 +726,131 @@ public class TerminalControl : FrameworkElement
         if (string.IsNullOrWhiteSpace(lineText))
             return matches;
 
-        var totalSw = System.Diagnostics.Stopwatch.StartNew();
-
-        // Collect URL matches (skip line on timeout)
-        var urlSw = System.Diagnostics.Stopwatch.StartNew();
-        try
+        // Collect URL matches
+        foreach (Match m in UrlRegex.Matches(lineText))
         {
-            foreach (Match m in UrlRegex.Matches(lineText))
-            {
-                matches.Add(new LinkMatch(m.Index, m.Index + m.Length, m.Value, LinkType.Url));
-            }
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            FileLog.Write($"[TerminalControl] URL regex timeout, skipping line (length={lineText.Length})");
-        }
-        urlSw.Stop();
-        if (urlSw.ElapsedMilliseconds > 5)
-        {
-            FileLog.Write($"[TerminalControl] URL regex slow: {urlSw.ElapsedMilliseconds}ms, lineLen={lineText.Length}");
+            matches.Add(new LinkMatch(m.Index, m.Index + m.Length, m.Value, LinkType.Url));
         }
 
-        // Collect absolute Windows path matches (skip on timeout)
-        var winSw = System.Diagnostics.Stopwatch.StartNew();
-        try
+        // Collect absolute Windows path matches
+        foreach (Match m in AbsoluteWindowsPathRegex.Matches(lineText))
         {
-            foreach (Match m in AbsoluteWindowsPathRegex.Matches(lineText))
-            {
-                string path = StripLineNumber(m.Value);
-                matches.Add(new LinkMatch(m.Index, m.Index + m.Length, path, LinkType.Path));
-            }
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            FileLog.Write($"[TerminalControl] Windows path regex timeout, skipping line (length={lineText.Length})");
-        }
-        winSw.Stop();
-        if (winSw.ElapsedMilliseconds > 5)
-        {
-            FileLog.Write($"[TerminalControl] Windows path regex slow: {winSw.ElapsedMilliseconds}ms, lineLen={lineText.Length}");
+            string path = StripLineNumber(m.Value);
+            matches.Add(new LinkMatch(m.Index, m.Index + m.Length, path, LinkType.Path));
         }
 
-        // Collect Unix-style path matches (skip on timeout)
-        var unixSw = System.Diagnostics.Stopwatch.StartNew();
-        try
+        // Collect Unix-style path matches
+        foreach (Match m in AbsoluteUnixPathRegex.Matches(lineText))
         {
-            foreach (Match m in AbsoluteUnixPathRegex.Matches(lineText))
-            {
-                string path = StripLineNumber(m.Value);
-                matches.Add(new LinkMatch(m.Index, m.Index + m.Length, path, LinkType.Path));
-            }
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            FileLog.Write($"[TerminalControl] Unix path regex timeout, skipping line (length={lineText.Length})");
-        }
-        unixSw.Stop();
-        if (unixSw.ElapsedMilliseconds > 5)
-        {
-            FileLog.Write($"[TerminalControl] Unix path regex slow: {unixSw.ElapsedMilliseconds}ms, lineLen={lineText.Length}");
+            string path = StripLineNumber(m.Value);
+            matches.Add(new LinkMatch(m.Index, m.Index + m.Length, path, LinkType.Path));
         }
 
-        // Collect relative path matches (only if session has repo path and path exists)
+        // Collect relative path matches (only if session has repo path and path exists in cache)
         if (_session?.RepoPath != null)
         {
-            var relSw = System.Diagnostics.Stopwatch.StartNew();
-            int fileChecks = 0;
-            try
+            foreach (Match m in RelativePathRegex.Matches(lineText))
             {
-                foreach (Match m in RelativePathRegex.Matches(lineText))
+                string relativePath = StripLineNumber(m.Value);
+                string fullPath = Path.Combine(_session.RepoPath, relativePath.Replace('/', '\\'));
+
+                if (_pathExistsCache.TryGetValue(fullPath, out bool exists))
                 {
-                    string relativePath = StripLineNumber(m.Value);
-
-                    // Skip if this looks like a URL/domain (contains .com, .org, .net, etc.)
-                    // This prevents File.Exists from treating "www.linkedin.com/path" as a UNC path
-                    // which causes 22+ second network timeouts
-                    if (LooksLikeDomainPath(relativePath))
-                    {
-                        continue;
-                    }
-
-                    string fullPath = Path.Combine(_session.RepoPath, relativePath.Replace('/', '\\'));
-
-                    var fileCheckSw = System.Diagnostics.Stopwatch.StartNew();
-                    bool exists = File.Exists(fullPath) || Directory.Exists(fullPath);
-                    fileCheckSw.Stop();
-                    fileChecks++;
-
-                    if (fileCheckSw.ElapsedMilliseconds > 50)
-                    {
-                        FileLog.Write($"[TerminalControl] File.Exists SLOW: {fileCheckSw.ElapsedMilliseconds}ms, path={fullPath}");
-                    }
-
+                    // Cache hit
                     if (exists)
-                    {
                         matches.Add(new LinkMatch(m.Index, m.Index + m.Length, relativePath, LinkType.Path));
-                    }
+                }
+                else
+                {
+                    // Cache miss — don't block render; check in background
+                    var capturedPath = fullPath;
+                    var capturedRelative = relativePath;
+                    _ = Task.Run(() =>
+                    {
+                        bool found = File.Exists(capturedPath) || Directory.Exists(capturedPath);
+                        _pathExistsCache[capturedPath] = found;
+                        if (found && Interlocked.CompareExchange(ref _pathCacheInvalidateNeeded, 1, 0) == 0)
+                            Dispatcher.BeginInvoke(InvalidateVisual);
+                    });
                 }
             }
-            catch (RegexMatchTimeoutException)
-            {
-                FileLog.Write($"[TerminalControl] Relative path regex timeout, skipping line (length={lineText.Length})");
-            }
-            relSw.Stop();
-            if (relSw.ElapsedMilliseconds > 10)
-            {
-                FileLog.Write($"[TerminalControl] Relative path check slow: {relSw.ElapsedMilliseconds}ms, fileChecks={fileChecks}, lineLen={lineText.Length}");
-            }
-        }
-
-        totalSw.Stop();
-        if (totalSw.ElapsedMilliseconds > 20)
-        {
-            FileLog.Write($"[TerminalControl] FindAllLinkMatches TOTAL slow: {totalSw.ElapsedMilliseconds}ms, matches={matches.Count}, lineLen={lineText.Length}");
         }
 
         return matches;
     }
 
     /// <summary>
-    /// Check if a path looks like a domain name (e.g., "www.linkedin.com/path").
-    /// These should not be passed to File.Exists as Windows treats them as UNC paths,
-    /// causing 22+ second network timeouts.
+    /// Detect if there's a path or URL at the specified cell position.
     /// </summary>
-    private static bool LooksLikeDomainPath(string path)
+    private (string? text, LinkType type) DetectLinkAtCell(int col, int row)
     {
-        // Common TLDs that indicate this is a domain, not a file path
-        string[] domainIndicators = { ".com/", ".org/", ".net/", ".io/", ".dev/", ".co/", ".edu/", ".gov/", ".ai/" };
-        foreach (var indicator in domainIndicators)
+        string lineText = GetLineText(row);
+        if (string.IsNullOrWhiteSpace(lineText))
+            return (null, LinkType.None);
+
+        // Try URL first (more specific)
+        var urlMatch = UrlRegex.Match(lineText);
+        while (urlMatch.Success)
         {
-            if (path.Contains(indicator, StringComparison.OrdinalIgnoreCase))
-                return true;
+            if (col >= urlMatch.Index && col < urlMatch.Index + urlMatch.Length)
+            {
+                return (urlMatch.Value, LinkType.Url);
+            }
+            urlMatch = urlMatch.NextMatch();
         }
 
-        // Also check for www. prefix
-        if (path.StartsWith("www.", StringComparison.OrdinalIgnoreCase))
-            return true;
+        // Try absolute Windows path
+        var winPathMatch = AbsoluteWindowsPathRegex.Match(lineText);
+        while (winPathMatch.Success)
+        {
+            if (col >= winPathMatch.Index && col < winPathMatch.Index + winPathMatch.Length)
+            {
+                string path = StripLineNumber(winPathMatch.Value);
+                return (path, LinkType.Path);
+            }
+            winPathMatch = winPathMatch.NextMatch();
+        }
 
-        return false;
+        // Try Unix-style absolute path (/c/path -> C:\path)
+        var unixPathMatch = AbsoluteUnixPathRegex.Match(lineText);
+        while (unixPathMatch.Success)
+        {
+            if (col >= unixPathMatch.Index && col < unixPathMatch.Index + unixPathMatch.Length)
+            {
+                string path = StripLineNumber(unixPathMatch.Value);
+                return (path, LinkType.Path);
+            }
+            unixPathMatch = unixPathMatch.NextMatch();
+        }
+
+        // Try relative path (only if we have a session with a repo path)
+        if (_session?.RepoPath != null)
+        {
+            var relPathMatch = RelativePathRegex.Match(lineText);
+            while (relPathMatch.Success)
+            {
+                if (col >= relPathMatch.Index && col < relPathMatch.Index + relPathMatch.Length)
+                {
+                    string relativePath = StripLineNumber(relPathMatch.Value);
+                    string fullPath = Path.Combine(_session.RepoPath, relativePath.Replace('/', '\\'));
+
+                    // Check cache first, fall back to synchronous check (click context, not render)
+                    if (_pathExistsCache.TryGetValue(fullPath, out bool exists))
+                    {
+                        if (exists) return (relativePath, LinkType.Path);
+                    }
+                    else
+                    {
+                        bool found = File.Exists(fullPath) || Directory.Exists(fullPath);
+                        _pathExistsCache[fullPath] = found;
+                        if (found) return (relativePath, LinkType.Path);
+                    }
+                }
+                relPathMatch = relPathMatch.NextMatch();
+            }
+        }
+
+        return (null, LinkType.None);
     }
 
     /// <summary>
