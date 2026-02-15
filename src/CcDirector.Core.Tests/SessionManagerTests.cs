@@ -345,6 +345,38 @@ public class SessionManagerTests : IDisposable
         }
     }
 
+    [Fact]
+    public void RemoveSession_WithClaudeSessionId_NotPersistedAfterRemoval()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"test_sessions_{Guid.NewGuid()}.json");
+        try
+        {
+            var store = new SessionStateStore(tempFile);
+
+            // Create a session and assign a ClaudeSessionId (normally persisted)
+            var session = _manager.CreateSession(Path.GetTempPath());
+            session.ClaudeSessionId = "test-claude-session-id";
+
+            // Verify it would be persisted before removal
+            _manager.SaveCurrentState(store);
+            var loaded = store.Load();
+            Assert.Single(loaded);
+
+            // Remove the session from the manager
+            _manager.RemoveSession(session.Id);
+
+            // After removal, SaveCurrentState should NOT include the removed session
+            _manager.SaveCurrentState(store);
+            loaded = store.Load();
+            Assert.Empty(loaded);
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+                File.Delete(tempFile);
+        }
+    }
+
     public void Dispose()
     {
         _manager.Dispose();
