@@ -51,6 +51,7 @@ public sealed class Session : IDisposable
     public const int MinVerificationLength = 50;
 
     private readonly ISessionBackend _backend;
+    private readonly TurnAccumulator _turnAccumulator = new();
     private bool _disposed;
 
     public SessionBackendType BackendType { get; }
@@ -140,6 +141,9 @@ public sealed class Session : IDisposable
 
     /// <summary>Fires when ActivityState changes. Args: (oldState, newState).</summary>
     public event Action<ActivityState, ActivityState>? OnActivityStateChanged;
+
+    /// <summary>Fires when a turn completes (Stop event received after UserPromptSubmit).</summary>
+    public event Action<Session, TurnData>? OnTurnCompleted;
 
     /// <summary>Access to the underlying backend for mode-specific operations.</summary>
     public ISessionBackend Backend => _backend;
@@ -242,6 +246,21 @@ public sealed class Session : IDisposable
     public void HandlePipeEvent(PipeMessage msg)
     {
         FileLog.Write($"[Session] HandlePipeEvent: session={Id}, event={msg.HookEventName}, tool={msg.ToolName ?? "n/a"}, currentState={ActivityState}");
+
+        // Accumulate turn data for session summary
+        if (msg.HookEventName == "UserPromptSubmit" && !string.IsNullOrEmpty(msg.Prompt))
+        {
+            var interrupted = _turnAccumulator.StartTurn(msg.Prompt);
+            if (interrupted != null)
+                OnTurnCompleted?.Invoke(this, interrupted);
+        }
+        else if (msg.HookEventName == "PreToolUse")
+            _turnAccumulator.AddToolUse(msg);
+        else if (msg.HookEventName == "Stop" && _turnAccumulator.IsActive)
+        {
+            var turnData = _turnAccumulator.FinishTurn();
+            OnTurnCompleted?.Invoke(this, turnData);
+        }
 
         var newState = msg.HookEventName switch
         {

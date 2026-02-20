@@ -30,4 +30,7 @@ public class SessionHistoryEntry
 
     /// <summary>Cached first prompt snippet from the Claude session (for search/display).</summary>
     public string? FirstPromptSnippet { get; set; }
+
+    /// <summary>Per-turn AI-generated summaries, ordered by turn number.</summary>
+    public List<string>? TurnSummaries { get; set; }
 }

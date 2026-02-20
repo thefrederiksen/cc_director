@@ -478,7 +478,7 @@
                                     Orientation="Horizontal"
                                     Margin="0,4,0,0"
                                     Visibility="Collapsed">
-                            <TextBlock Text="Session: "
+                            <TextBlock Text="Claude ID: "
                                        Foreground="#6B7280"
                                        FontSize="10" />
                             <TextBlock x:Name="HeaderSessionId"
@@ -510,6 +510,14 @@
                                     Foreground="#D1D5DB"
                                     BorderThickness="0"
                                     Cursor="Hand" />
+                            <!-- Director ID -->
+                            <TextBlock Text="    Director ID: "
+                                       Foreground="#6B7280"
+                                       FontSize="10" />
+                            <TextBlock x:Name="HeaderDirectorId"
+                                       Foreground="#9CA3AF"
+                                       FontSize="10"
+                                       FontFamily="Consolas, Courier New" />
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -568,6 +576,8 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition x:Name="SummaryColumn" Width="0" />
                             </Grid.ColumnDefinitions>
                             <Border x:Name="TerminalArea" Grid.Column="0" Background="#1E1E1E" />
                             <ScrollBar x:Name="TerminalScrollBar" Grid.Column="1"
@@ -575,6 +585,80 @@
                                        Visibility="Collapsed"
                                        Style="{StaticResource TerminalScrollBarStyle}"
                                        ValueChanged="TerminalScrollBar_ValueChanged" />
+
+                            <!-- Summary Panel Splitter -->
+                            <GridSplitter x:Name="SummarySplitter" Grid.Column="2"
+                                          Width="5" Background="#2D2D30"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Stretch"
+                                          Visibility="Collapsed" />
+
+                            <!-- Session Summary Panel -->
+                            <Border x:Name="SummaryPanel" Grid.Column="3"
+                                    Background="#1E1E1E" BorderBrush="#3C3C3C"
+                                    BorderThickness="1,0,0,0"
+                                    Visibility="Collapsed">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Header -->
+                                    <Border Grid.Row="0" Background="#252526" Padding="8,6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="SESSION SUMMARY"
+                                                       Foreground="#888888" FontSize="11"
+                                                       FontWeight="SemiBold"
+                                                       VerticalAlignment="Center" />
+                                            <Button x:Name="CloseSummaryButton" Grid.Column="1"
+                                                    Content="✕" FontSize="10"
+                                                    Background="Transparent" Foreground="#888888"
+                                                    BorderThickness="0" Padding="4,2"
+                                                    Cursor="Hand"
+                                                    Click="CloseSummaryButton_Click"
+                                                    ToolTip="Hide summary panel" />
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- Summary Content -->
+                                    <Grid Grid.Row="1">
+                                        <!-- Empty state message -->
+                                        <TextBlock x:Name="SummaryEmptyText"
+                                                   Text="No turns yet. Summaries will appear here as you interact with Claude."
+                                                   Foreground="#6B7280" FontSize="11"
+                                                   FontStyle="Italic"
+                                                   TextWrapping="Wrap"
+                                                   Margin="12,16"
+                                                   VerticalAlignment="Top" />
+
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled"
+                                                      Background="#1E1E1E">
+                                            <ItemsControl x:Name="SummaryItemsControl" Padding="8,4">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Margin="0,4,0,8">
+                                                            <TextBlock Text="{Binding Header}"
+                                                                       Foreground="#569CD6" FontSize="11"
+                                                                       FontWeight="SemiBold"
+                                                                       Margin="0,0,0,2" />
+                                                            <TextBlock Text="{Binding Summary}"
+                                                                       Foreground="#CCCCCC" FontSize="12"
+                                                                       TextWrapping="Wrap"
+                                                                       LineHeight="18" />
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                    </Grid>
+                                </Grid>
+                            </Border>
                         </Grid>
                     </TabItem>
                     <TabItem Header="Source Control">

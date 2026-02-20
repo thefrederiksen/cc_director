@@ -25,3 +25,9 @@ tmp_build_output/reconnect-result.png
 tmp_build_output/reconnect-test.png
 tmp_build_output/restarted.png
 tmp_build_output/right_click_session.png
+
+# Debug/temp output files
+cli-explorer-console*.txt
+cli-explorer-report.md
+json-schema-stderr.txt
+*_wpftmp.csproj

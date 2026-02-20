@@ -25,6 +25,10 @@ public partial class MainWindow : Window
 {
     private readonly ObservableCollection<SessionViewModel> _sessions = new();
     private readonly ObservableCollection<PipeMessageViewModel> _pipeMessages = new();
+    private readonly ObservableCollection<TurnSummaryViewModel> _summaryItems = new();
+    private readonly Dictionary<Guid, List<TurnSummaryViewModel>> _turnSummariesBySession = new();
+    private readonly Dictionary<Guid, int> _turnCounters = new();
+    private ClaudeClient? _claudeClient;
     private const int MaxPipeMessages = 500;
 
     private bool _pipeMessagesExpanded;
@@ -50,6 +54,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         SessionList.ItemsSource = _sessions;
         PipeMessageList.ItemsSource = _pipeMessages;
+        SummaryItemsControl.ItemsSource = _summaryItems;
         Loaded += MainWindow_Loaded;
         LocationChanged += (_, _) => DeferConsolePositionUpdate();
         SizeChanged += (_, _) => DeferConsolePositionUpdate();
@@ -347,10 +352,14 @@ public partial class MainWindow : Window
                         session.VerifyClaudeSession();
                     }
 
+                    session.OnTurnCompleted += OnSessionTurnCompleted;
                     var vm = new SessionViewModel(session, Dispatcher);
                     vm.PendingPromptText = p.PendingPromptText ?? string.Empty;
                     _sessions.Add(vm);
                     restored++;
+
+                    // Restore saved turn summaries from history
+                    LoadSavedSummaries(session);
 
                     var resumeInfo = resumeSessionId != null
                         ? $"Resume={resumeSessionId[..8]}..."
@@ -502,6 +511,7 @@ public partial class MainWindow : Window
             // Create session with ConPty backend (default mode)
             var session = _sessionManager.CreateSession(repoPath, null, SessionBackendType.ConPty, resumeSessionId);
             FileLog.Write($"[MainWindow] CreateSession: session created, id={session.Id}, pid={session.ProcessId}, elapsed={sw.ElapsedMilliseconds}ms");
+            session.OnTurnCompleted += OnSessionTurnCompleted;
             var vm = new SessionViewModel(session, Dispatcher);
             _sessions.Add(vm);
             SessionList.SelectedItem = vm;
@@ -669,6 +679,9 @@ public partial class MainWindow : Window
         // Show session header banner
         UpdateSessionHeader();
 
+        // Show summary panel for this session (if it has summaries)
+        RefreshSummaryPanel(session.Id);
+
         // Attach git changes polling
         GitChanges.Attach(session.RepoPath);
 
@@ -691,6 +704,9 @@ public partial class MainWindow : Window
 
         // Reset scrollbar
         TerminalScrollBar.Visibility = Visibility.Collapsed;
+
+        // Hide summary panel
+        HideSummaryPanel();
 
         // Hide session header banner
         UpdateSessionHeader();
@@ -900,6 +916,10 @@ public partial class MainWindow : Window
         // Show session ID panel
         HeaderSessionIdPanel.Visibility = Visibility.Visible;
         HeaderSessionId.Text = vm.ClaudeSessionIdShort;
+
+        // Show Director's internal session ID
+        var directorId = vm.Session.Id.ToString();
+        HeaderDirectorId.Text = directorId.Length > 8 ? directorId[..8] + "..." : directorId;
 
         // Update verification badge
         if (vm.IsVerified)
@@ -1335,6 +1355,138 @@ public partial class MainWindow : Window
                 }
             }
         });
+    }
+
+    private async void OnSessionTurnCompleted(Session session, TurnData turnData)
+    {
+        FileLog.Write($"[MainWindow] OnSessionTurnCompleted: session={session.Id}, prompt={turnData.UserPrompt.Length} chars");
+
+        try
+        {
+            // Increment turn counter for this session
+            if (!_turnCounters.TryGetValue(session.Id, out var turnNumber))
+                turnNumber = 0;
+            turnNumber++;
+            _turnCounters[session.Id] = turnNumber;
+
+            // Summarize on background thread
+            var client = GetOrCreateClaudeClient(session.WorkingDirectory);
+            if (client == null)
+            {
+                FileLog.Write("[MainWindow] OnSessionTurnCompleted: no ClaudeClient available, skipping summarization");
+                return;
+            }
+
+            var summary = await SessionSummarizer.SummarizeTurnAsync(client, turnData, turnNumber);
+
+            // Dispatch result to UI thread
+            await Dispatcher.BeginInvoke(() =>
+            {
+                var item = new TurnSummaryViewModel($"Turn {turnNumber}:", summary);
+
+                if (!_turnSummariesBySession.TryGetValue(session.Id, out var list))
+                {
+                    list = new List<TurnSummaryViewModel>();
+                    _turnSummariesBySession[session.Id] = list;
+                }
+                list.Add(item);
+
+                // Update the UI if this is the active session
+                if (_activeSession?.Id == session.Id)
+                    RefreshSummaryPanel(session.Id);
+
+                // Persist to session history
+                PersistTurnSummary(session, summary);
+            });
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[MainWindow] OnSessionTurnCompleted FAILED: {ex.Message}");
+        }
+    }
+
+    private ClaudeClient? GetOrCreateClaudeClient(string workingDirectory)
+    {
+        if (_claudeClient != null)
+            return _claudeClient;
+
+        var claudePath = ClaudeClient.FindClaudePath();
+        if (claudePath == null)
+        {
+            FileLog.Write("[MainWindow] GetOrCreateClaudeClient: claude.exe not found on PATH");
+            return null;
+        }
+
+        _claudeClient = new ClaudeClient(claudePath, workingDirectory, defaultTimeoutMs: 30_000);
+        return _claudeClient;
+    }
+
+    private void RefreshSummaryPanel(Guid sessionId)
+    {
+        _summaryItems.Clear();
+
+        if (_turnSummariesBySession.TryGetValue(sessionId, out var list) && list.Count > 0)
+        {
+            foreach (var item in list)
+                _summaryItems.Add(item);
+        }
+
+        var hasSummaries = _summaryItems.Count > 0;
+
+        // Always show the panel when a session is active
+        SummaryPanel.Visibility = Visibility.Visible;
+        SummarySplitter.Visibility = Visibility.Visible;
+        SummaryColumn.Width = new GridLength(280);
+        SummaryEmptyText.Visibility = hasSummaries ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void HideSummaryPanel()
+    {
+        SummaryPanel.Visibility = Visibility.Collapsed;
+        SummarySplitter.Visibility = Visibility.Collapsed;
+        SummaryColumn.Width = new GridLength(0);
+    }
+
+    private void CloseSummaryButton_Click(object sender, RoutedEventArgs e)
+    {
+        HideSummaryPanel();
+    }
+
+    private void PersistTurnSummary(Session session, string summary)
+    {
+        if (session.HistoryEntryId == null)
+            return;
+
+        var app = (App)Application.Current;
+        var entry = app.SessionHistoryStore.Load(session.HistoryEntryId.Value);
+        if (entry == null)
+            return;
+
+        entry.TurnSummaries ??= new List<string>();
+        entry.TurnSummaries.Add(summary);
+        entry.LastUsedAt = DateTimeOffset.UtcNow;
+        app.SessionHistoryStore.Save(entry);
+    }
+
+    private void LoadSavedSummaries(Session session)
+    {
+        if (session.HistoryEntryId == null)
+            return;
+
+        var app = (App)Application.Current;
+        var entry = app.SessionHistoryStore.Load(session.HistoryEntryId.Value);
+        if (entry?.TurnSummaries == null || entry.TurnSummaries.Count == 0)
+            return;
+
+        var list = new List<TurnSummaryViewModel>();
+        for (int i = 0; i < entry.TurnSummaries.Count; i++)
+        {
+            list.Add(new TurnSummaryViewModel($"Turn {i + 1}:", entry.TurnSummaries[i]));
+        }
+        _turnSummariesBySession[session.Id] = list;
+        _turnCounters[session.Id] = entry.TurnSummaries.Count;
+
+        FileLog.Write($"[MainWindow] LoadSavedSummaries: loaded {list.Count} summaries for session {session.Id}");
     }
 
     private void OnClaudeSessionRegistered(Session session, string claudeSessionId)
@@ -2558,5 +2710,17 @@ public class PipeMessageViewModel
     {
         brush.Freeze();
         return brush;
+    }
+}
+
+public class TurnSummaryViewModel
+{
+    public string Header { get; }
+    public string Summary { get; }
+
+    public TurnSummaryViewModel(string header, string summary)
+    {
+        Header = header;
+        Summary = summary;
     }
 }
