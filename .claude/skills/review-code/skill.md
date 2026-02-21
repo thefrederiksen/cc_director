@@ -70,6 +70,50 @@ EXCEPTIONS (NOT PII - do not flag these):
 - Open-source project names and maintainer names from public packages
 - Anthropic/Claude branding (this is a Claude Code tool - that's expected)
 
+STEP 3.5: CenCon Documentation Check
+
+Check if docs/cencon/architecture_manifest.yaml exists using the Glob tool.
+
+If docs/cencon/architecture_manifest.yaml does NOT exist:
+- Set CENCON_STATUS = SKIPPED
+- Add SUGGESTION: "Consider adding CenCon documentation (docs/cencon/)"
+- Continue to STEP 3.6
+
+If docs/cencon/architecture_manifest.yaml EXISTS:
+1. Read the manifest using the Read tool
+2. Extract the last_updated field (format: YYYY-MM-DD)
+3. Use Bash to find the most recently modified .cs file in src/:
+   git log -1 --format="%ai" -- "src/**/*.cs"
+4. Documentation is STALE if:
+   - Any .cs file was modified MORE RECENTLY than the manifest's last_updated date
+   - OR manifest last_updated is more than 30 days old
+5. If STALE:
+   - Add BLOCKING issue: "CenCon architecture_manifest.yaml is outdated"
+   - Include: "Last manifest update: [date], Most recent code change: [date]"
+   - Set CENCON_STATUS = FAIL
+6. If CURRENT:
+   - Set CENCON_STATUS = PASS
+
+STEP 3.6: Security Profile Drift Check
+
+Check if docs/cencon/security_profile.yaml exists using the Glob tool.
+
+If docs/cencon/security_profile.yaml does NOT exist:
+- Set SECURITY_DRIFT = SKIPPED
+- Continue to STEP 4
+
+If docs/cencon/security_profile.yaml EXISTS:
+1. Read the profile using the Read tool
+2. Extract the last_verified field (format: YYYY-MM-DD)
+3. Calculate days since verification (use today's date)
+4. Extract drift.threshold_days (default: 30)
+5. If days since verification > threshold_days:
+   - Add BLOCKING issue: "Security profile drift detected"
+   - Include: "Last verified: [date], Days since: [N], Threshold: [threshold_days]"
+   - Set SECURITY_DRIFT = FAIL
+6. If within threshold:
+   - Set SECURITY_DRIFT = PASS
+
 STEP 4: Code style review
 
 For each .cs, .xaml, and .xaml.cs file from Step 1:
@@ -130,8 +174,16 @@ BLOCKING_COUNT: [number]
 WARNING_COUNT: [number]
 SUGGESTION_COUNT: [number]
 PII_COUNT: [number]
+CENCON_STATUS: PASS, FAIL, or SKIPPED
+SECURITY_DRIFT: PASS, FAIL, or SKIPPED
 
-FAIL if any BLOCKING issues OR any PII issues exist. PASS otherwise.
+FAIL if any of:
+- BLOCKING issues exist
+- PII issues exist
+- CENCON_STATUS is FAIL
+- SECURITY_DRIFT is FAIL
+
+PASS if none of the above conditions are true. SKIPPED status does NOT cause FAIL.
 
 ## Common Issues from CodingStyle.md
 
@@ -172,6 +224,7 @@ PII scan applies to ALL file types, not just code files.
 
 ---
 
-**Skill Version:** 2.0
-**Last Updated:** 2026-02-18
+**Skill Version:** 3.0
+**Last Updated:** 2026-02-21
 **Adapted from:** mindzieWeb review-code skill
+**CenCon Integration:** Added STEP 3.5 (Documentation Check) and STEP 3.6 (Security Drift Check)

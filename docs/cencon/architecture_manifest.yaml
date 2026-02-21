@@ -1,0 +1,238 @@
+# CC Director Architecture Manifest
+# CenCon Method - Machine-readable C4 model
+# Schema version: 1.0.0
+
+schema_version: "1.0.0"
+project:
+  name: CC Director
+  description: Windows desktop application for managing multiple Claude Code CLI sessions
+  version: "1.1.0"
+  framework: ".NET 10"
+  platform: "Windows 10/11 (WPF)"
+
+last_updated: "2026-02-21"
+
+# C4 Level 1: System Context
+context:
+  system:
+    name: CC Director
+    description: Multi-session Claude Code management application
+    technology: WPF Desktop Application
+
+  actors:
+    - id: developer
+      name: Developer
+      description: Software developer using Claude Code for coding tasks
+      type: person
+      relationship:
+        target: cc_director
+        description: Manages multiple Claude Code sessions
+
+    - id: claude_code
+      name: Claude Code CLI
+      description: Anthropic's CLI for Claude AI assistance
+      type: external_system
+      relationship:
+        target: cc_director
+        description: Spawned and monitored by Director via ConPTY
+
+    - id: git
+      name: Git
+      description: Version control system
+      type: external_system
+      relationship:
+        target: cc_director
+        description: Provides repository status information
+
+    - id: openai_api
+      name: OpenAI API
+      description: Cloud API for speech-to-text and text-to-speech
+      type: external_system
+      relationship:
+        target: cc_director
+        description: Voice mode transcription and synthesis
+
+# C4 Level 2: Container Diagram
+containers:
+  - id: wpf_ui
+    name: WPF UI Layer
+    technology: C# / WPF / XAML
+    description: Desktop application user interface
+    project: CcDirector.Wpf
+    components:
+      - name: MainWindow
+        description: Primary window with session sidebar and content area
+        file: MainWindow.xaml / MainWindow.xaml.cs
+      - name: EmbeddedBackend
+        description: Native console window overlay using Win32 SetParent
+        file: Backends/EmbeddedBackend.cs
+      - name: EmbeddedConsoleHost
+        description: WPF control for hosting embedded console windows
+        file: Controls/EmbeddedConsoleHost.cs
+      - name: Dialogs
+        description: Modal dialogs for session management
+        files:
+          - NewSessionDialog.xaml
+          - RenameSessionDialog.xaml
+          - RelinkSessionDialog.xaml
+          - SettingsDialog.xaml
+      - name: Voice UI
+        description: Voice mode controls and status display
+        directory: Voice/
+
+  - id: core_services
+    name: Core Services Layer
+    technology: C# / .NET 10
+    description: Business logic and domain services
+    project: CcDirector.Core
+    components:
+      - name: SessionManager
+        description: Session lifecycle management
+        file: Sessions/SessionManager.cs
+      - name: Session
+        description: Central session abstraction with activity state machine
+        file: Sessions/Session.cs
+      - name: ActivityState
+        description: Claude cognitive state enum (Idle, Working, WaitingForInput, etc.)
+        file: Sessions/ActivityState.cs
+      - name: DirectorPipeServer
+        description: Named pipe IPC server for hook events
+        file: Pipes/DirectorPipeServer.cs
+      - name: EventRouter
+        description: Routes pipe messages to appropriate sessions
+        file: Pipes/EventRouter.cs
+      - name: HookInstaller
+        description: Manages Claude Code hooks in settings.json
+        file: Hooks/HookInstaller.cs
+      - name: GitStatusProvider
+        description: Async git status polling
+        file: Git/GitStatusProvider.cs
+      - name: ClaudeSessionReader
+        description: Session verification via .jsonl transcript matching
+        file: Claude/ClaudeSessionReader.cs
+      - name: VoiceModeController
+        description: Orchestrates voice interaction flow
+        file: Voice/VoiceModeController.cs
+      - name: CircularTerminalBuffer
+        description: Thread-safe ring buffer for terminal output
+        file: Memory/CircularTerminalBuffer.cs
+      - name: FileLog
+        description: Thread-safe async file logging
+        file: Utilities/FileLog.cs
+
+  - id: native_apis
+    name: Native Windows APIs
+    technology: Win32 / P/Invoke
+    description: Low-level Windows API integration
+    components:
+      - name: ConPTY
+        description: Windows Pseudo Console (CreatePseudoConsole, ResizePseudoConsole)
+        files:
+          - ConPty/NativeMethods.cs
+          - ConPty/PseudoConsole.cs
+          - ConPty/ProcessHost.cs
+      - name: Window Management
+        description: SetParent, MoveWindow for console embedding
+        file: Backends/EmbeddedBackend.cs
+      - name: Named Pipes
+        description: NamedPipeServerStream for IPC
+        file: Pipes/DirectorPipeServer.cs
+      - name: Process Management
+        description: CreateProcessW for process spawning
+        file: ConPty/ProcessHost.cs
+
+# Data flows
+data_flows:
+  - id: hook_event_flow
+    name: Hook Event Flow
+    description: Claude Code hook events to Director UI
+    path:
+      - Claude Code (claude.exe)
+      - hook-relay.ps1 (PowerShell relay script)
+      - \\.\pipe\CC_ClaudeDirector (Named Pipe)
+      - DirectorPipeServer
+      - EventRouter
+      - Session.HandlePipeEvent()
+      - UI (INotifyPropertyChanged)
+
+  - id: user_input_flow
+    name: User Input Flow
+    description: User input to Claude session
+    path:
+      - User input (keyboard)
+      - conhost.exe
+      - claude.exe (stdin)
+      - Hook fires (UserPromptSubmit)
+      - "[hook_event_flow]"
+
+  - id: session_restore_flow
+    name: Session Restore Flow
+    description: Restoring sessions after application restart
+    path:
+      - Application startup
+      - SessionStateStore.Load()
+      - SessionManager.RestoreEmbeddedSession()
+      - ClaudeSessionReader.VerifyWithTerminalContent()
+      - Session verified/linked
+
+# Security boundaries
+security_boundaries:
+  - id: process_isolation
+    name: Process Isolation
+    description: Each Claude session runs in isolated conhost.exe process
+    components:
+      - conhost.exe (per session)
+      - claude.exe (per session)
+
+  - id: ipc_boundary
+    name: IPC Boundary
+    description: Named pipes are local-only, no network exposure
+    components:
+      - \\.\pipe\CC_ClaudeDirector
+    security_note: Pipe accessible only on local machine
+
+  - id: file_system
+    name: File System Locations
+    description: Application data storage locations
+    paths:
+      - logs: "%LOCALAPPDATA%\\CcDirector\\logs\\"
+      - sessions: "~/Documents/CcDirector/sessions.json"
+      - repositories: "~/Documents/CcDirector/repositories.json"
+      - hooks_config: "~/.claude/settings.json"
+
+# Design patterns used
+patterns:
+  - name: Strategy Pattern
+    implementation: ISessionBackend interface with 3 implementations
+    purpose: Abstracts terminal hosting modes
+    files:
+      - Backends/ISessionBackend.cs
+      - Backends/EmbeddedBackend.cs
+      - Backends/ConPtyBackend.cs
+      - Backends/PipeBackend.cs
+
+  - name: Observer Pattern
+    implementation: Events (StatusChanged, OnActivityStateChanged)
+    purpose: UI updates on state changes
+    files:
+      - Sessions/Session.cs
+
+  - name: State Machine
+    implementation: ActivityState enum with HandlePipeEvent()
+    purpose: Claude cognitive state tracking
+    files:
+      - Sessions/ActivityState.cs
+      - Sessions/Session.cs
+
+  - name: Producer-Consumer
+    implementation: BlockingCollection<string> in FileLog
+    purpose: Thread-safe async logging
+    files:
+      - Utilities/FileLog.cs
+
+  - name: Repository Pattern
+    implementation: RecentSessionStore, RepositoryRegistry
+    purpose: Persistence abstraction
+    files:
+      - Sessions/RecentSessionStore.cs
+      - Configuration/RepositoryRegistry.cs

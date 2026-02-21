@@ -1,0 +1,176 @@
+# CC Director Security Profile
+# CenCon Method - Security scan rules and drift configuration
+# Schema version: 1.0.0
+
+schema_version: "1.0.0"
+project:
+  name: CC Director
+  version: "1.1.0"
+
+# Last verification date - used for drift detection
+# Security profile is considered STALE if older than drift_threshold_days
+last_verified: "2026-02-21"
+
+# Drift configuration
+drift:
+  threshold_days: 30
+  action_on_drift: FAIL_REVIEW
+
+# OWASP Desktop Application Security Checks
+# Based on OWASP Desktop Application Security Verification Standard
+owasp_desktop:
+  - id: DT-01
+    name: Insecure Data Storage
+    description: Check for sensitive data stored insecurely
+    status: PASS
+    checks:
+      - No plaintext credentials in config files
+      - Session state uses user documents folder (not world-readable)
+      - Logs stored in %LOCALAPPDATA% (user-specific)
+    mitigations:
+      - Credentials read from environment variables only
+      - No API keys in source code
+      - Logs truncate sensitive content to ~100 chars
+
+  - id: DT-02
+    name: Insufficient Input Validation
+    description: Check for input validation on external data
+    status: PASS
+    checks:
+      - All file paths validated before Process.Start
+      - Pipe message JSON deserialized with schema validation
+      - Git command output parsed, not executed
+    mitigations:
+      - Process arguments passed as arrays, not concatenated strings
+      - No shell command construction from user input
+
+  - id: DT-03
+    name: Insecure Process Execution
+    description: Check for command injection vulnerabilities
+    status: PASS
+    checks:
+      - Process.Start uses argument arrays
+      - No string concatenation for shell commands
+      - Claude path validated before execution
+    mitigations:
+      - HookRelayScript uses fixed PowerShell template
+      - No user-controlled command parameters
+
+  - id: DT-04
+    name: Insecure IPC
+    description: Check for IPC security issues
+    status: PASS
+    checks:
+      - Named pipes local-only (no network binding)
+      - Pipe name is fixed (not user-controlled)
+      - No sensitive data in pipe messages
+    mitigations:
+      - NamedPipeServerStream with local access only
+      - PipeMessage validation before routing
+
+  - id: DT-05
+    name: Information Disclosure
+    description: Check for sensitive information leakage
+    status: PASS
+    checks:
+      - Logs do not contain secrets
+      - Error messages do not expose internal paths
+      - Terminal buffer content not logged in full
+    mitigations:
+      - FileLog truncates large content
+      - No stack traces in user-facing messages
+
+  - id: DT-06
+    name: Improper Error Handling
+    description: Check for exception handling issues
+    status: PASS
+    checks:
+      - No swallowed exceptions
+      - Try-catch at entry points only
+      - Specific exception types thrown
+    mitigations:
+      - CodingStyle.md enforces fail-fast pattern
+      - All exceptions logged before rethrow
+
+# SOC 2 Control Alignment
+soc2_alignment:
+  - id: CC6.1
+    name: Logical Access Controls
+    description: The entity implements logical access security software
+    alignment: |
+      - Application runs in user context (no elevation required)
+      - Named pipes accessible only to local user
+      - No network-exposed endpoints
+
+  - id: CC6.6
+    name: System Boundary Protection
+    description: The entity implements controls to prevent unauthorized access
+    alignment: |
+      - Process isolation per Claude session
+      - No inbound network connections
+      - File system access limited to user directories
+
+  - id: CC7.2
+    name: Incident Response
+    description: The entity responds to identified security incidents
+    alignment: |
+      - Comprehensive logging (FileLog)
+      - Log files retained in %LOCALAPPDATA%
+      - Session state persisted for recovery
+
+# Custom security rules (grep patterns for code review)
+custom_rules:
+  - id: CCD-01
+    name: No Hardcoded Credentials
+    severity: BLOCKING
+    pattern: "(password|apikey|secret|token)\\s*=\\s*[\"'][^\"']+[\"']"
+    exclude_patterns:
+      - "\\.(md|txt)$"
+      - "test"
+    description: Detect hardcoded credentials in source code
+
+  - id: CCD-02
+    name: No Null-Forgiving Operator
+    severity: BLOCKING
+    pattern: "!\\s*[;\\)]"
+    file_types:
+      - "*.cs"
+    description: Null-forgiving operator (!) suppresses compiler warnings unsafely
+
+  - id: CCD-03
+    name: No Blocking Async
+    severity: BLOCKING
+    pattern: "\\.(Result|Wait)\\s*\\("
+    file_types:
+      - "*.cs"
+    exclude_patterns:
+      - "test"
+    description: Using .Result or .Wait() causes deadlocks in UI applications
+
+  - id: CCD-04
+    name: Logging in Public Methods
+    severity: WARNING
+    pattern: "public\\s+\\w+\\s+\\w+\\s*\\([^)]*\\)\\s*\\{(?![^}]*FileLog\\.Write)"
+    file_types:
+      - "*.cs"
+    description: Public methods should log entry/exit
+
+  - id: CCD-05
+    name: PII in Paths
+    severity: BLOCKING
+    pattern: "C:\\\\Users\\\\[^\\\\\"]+\\\\"
+    exclude_patterns:
+      - "%USERPROFILE%"
+      - "Environment.GetFolderPath"
+    description: Hardcoded user paths expose PII
+
+# Security review checklist
+review_checklist:
+  - "No null! (null-forgiving operator)"
+  - "No .Result or .Wait() (deadlock risk)"
+  - "No try-catch in helper methods"
+  - "All public methods logged"
+  - "No hardcoded credentials"
+  - "No PII in source code"
+  - "Process.Start paths validated"
+  - "Named pipe messages validated"
