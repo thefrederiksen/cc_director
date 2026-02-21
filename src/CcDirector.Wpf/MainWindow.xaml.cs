@@ -256,152 +256,149 @@ public partial class MainWindow : Window
         var app = (App)Application.Current;
         var restoreResult = app.RestoredPersistedData;
 
-        if (restoreResult == null)
-        {
-            FileLog.Write("[MainWindow] RestorePersistedSessions: No restore result");
+        if (!ValidateRestoreResult(restoreResult, app, out var persisted))
             return;
-        }
-
-        // Check for load errors first - sessions.json may have been corrupted
-        if (!restoreResult.LoadSuccess)
-        {
-            FileLog.Write($"[MainWindow] RestorePersistedSessions: Load failed - {restoreResult.LoadErrorMessage}");
-
-            if (restoreResult.FileExistedButFailed)
-            {
-                // Show error to user - this is a critical issue they need to know about
-                MessageBox.Show(this,
-                    $"Failed to load saved sessions:\n\n{restoreResult.LoadErrorMessage}\n\n" +
-                    $"A backup was created at sessions.json.bak.\n" +
-                    $"Your sessions from the previous run could not be restored.",
-                    "Session Load Error",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-            }
-
-            app.RestoredPersistedData = null;
-            return;
-        }
-
-        var persisted = restoreResult.Sessions;
-        if (persisted.Count == 0)
-        {
-            FileLog.Write("[MainWindow] RestorePersistedSessions: No sessions to restore");
-            app.RestoredPersistedData = null;
-            return;
-        }
 
         FileLog.Write($"[MainWindow] RestorePersistedSessions: Found {persisted.Count} persisted session(s)");
 
-        int restored = 0;
-        int skippedRepoNotFound = 0;
-        int failedToCreate = 0;
         var failedRepos = new List<string>();
+        int restored = 0, skippedRepoNotFound = 0, failedToCreate = 0;
 
-        // Restore sessions in their saved order (SortOrder preserves UI order from last run)
         foreach (var p in persisted.OrderBy(s => s.SortOrder))
         {
-            // Skip if repo path no longer exists
-            if (!System.IO.Directory.Exists(p.RepoPath))
+            var result = RestoreSingleSession(p);
+            switch (result.Status)
             {
-                FileLog.Write($"[MainWindow] Skipping session {p.Id}: Repo path not found: {p.RepoPath}");
-                skippedRepoNotFound++;
-                failedRepos.Add(System.IO.Path.GetFileName(p.RepoPath.TrimEnd('\\', '/')) + " (path not found)");
-                continue;
-            }
-
-            // Determine resume ID: only resume if ClaudeSessionId exists AND session file is still valid
-            string? resumeSessionId = null;
-            if (!string.IsNullOrEmpty(p.ClaudeSessionId))
-            {
-                if (ClaudeSessionReader.SessionExists(p.ClaudeSessionId, p.RepoPath))
-                {
-                    resumeSessionId = p.ClaudeSessionId;
-                }
-                else
-                {
-                    FileLog.Write($"[MainWindow] Session {p.Id}: ClaudeSessionId {p.ClaudeSessionId[..8]}... no longer exists in Claude storage, starting fresh");
-                }
-            }
-            else
-            {
-                FileLog.Write($"[MainWindow] Session {p.Id}: No ClaudeSessionId, starting fresh");
-            }
-
-            try
-            {
-                // Create new session, with --resume only if the Claude session still exists
-                var session = _sessionManager.CreateSession(
-                    p.RepoPath,
-                    claudeArgs: null,
-                    SessionBackendType.ConPty,
-                    resumeSessionId: resumeSessionId);
-
-                if (session != null)
-                {
-                    // Restore custom name, color, and history link
-                    session.CustomName = p.CustomName;
-                    session.CustomColor = p.CustomColor;
-                    session.HistoryEntryId = p.HistoryEntryId;
-
-                    // Mark as pre-verified since this is a restored session with ClaudeSessionId
-                    // This skips terminal verification (it was already verified in previous run)
-                    if (!string.IsNullOrEmpty(session.ClaudeSessionId))
-                    {
-                        session.MarkAsPreVerified();
-                        session.VerifyClaudeSession();
-                    }
-
-                    session.OnTurnCompleted += OnSessionTurnCompleted;
-                    var vm = new SessionViewModel(session, Dispatcher);
-                    vm.PendingPromptText = p.PendingPromptText ?? string.Empty;
-                    _sessions.Add(vm);
-                    restored++;
-
-                    // Restore saved turn summaries from history
-                    LoadSavedSummaries(session);
-
-                    var resumeInfo = resumeSessionId != null
-                        ? $"Resume={resumeSessionId[..8]}..."
-                        : "Fresh start";
-                    FileLog.Write($"[MainWindow] Restored session {session.Id} from {p.RepoPath} ({resumeInfo})");
-                }
-                else
-                {
-                    failedToCreate++;
-                    failedRepos.Add(System.IO.Path.GetFileName(p.RepoPath.TrimEnd('\\', '/')) + " (create failed)");
-                }
-            }
-            catch (Exception ex)
-            {
-                FileLog.Write($"[MainWindow] Failed to restore session for {p.RepoPath}: {ex.Message}");
-                failedToCreate++;
-                failedRepos.Add(System.IO.Path.GetFileName(p.RepoPath.TrimEnd('\\', '/')) + $" ({ex.Message})");
+                case RestoreStatus.Success: restored++; break;
+                case RestoreStatus.RepoNotFound: skippedRepoNotFound++; failedRepos.Add(result.FailureReason ?? "unknown"); break;
+                case RestoreStatus.CreateFailed: failedToCreate++; failedRepos.Add(result.FailureReason ?? "unknown"); break;
             }
         }
 
         int totalFailed = skippedRepoNotFound + failedToCreate;
-        FileLog.Write($"[MainWindow] RestorePersistedSessions complete: restored={restored}, skippedRepoNotFound={skippedRepoNotFound}, failedToCreate={failedToCreate}");
+        FileLog.Write($"[MainWindow] RestorePersistedSessions complete: restored={restored}, skipped={skippedRepoNotFound}, failed={failedToCreate}");
 
-        // Show summary to user if any sessions failed to restore
+        HandleRestoreResults(app, persisted.Count, restored, totalFailed, failedRepos);
+    }
+
+    private bool ValidateRestoreResult(
+        RestoreSessionsResult? restoreResult,
+        App app,
+        out List<PersistedSession> sessions)
+    {
+        sessions = new List<PersistedSession>();
+
+        if (restoreResult == null)
+        {
+            FileLog.Write("[MainWindow] RestorePersistedSessions: No restore result");
+            return false;
+        }
+
+        if (!restoreResult.LoadSuccess)
+        {
+            FileLog.Write($"[MainWindow] RestorePersistedSessions: Load failed - {restoreResult.LoadErrorMessage}");
+            if (restoreResult.FileExistedButFailed)
+            {
+                MessageBox.Show(this,
+                    $"Failed to load saved sessions:\n\n{restoreResult.LoadErrorMessage}\n\n" +
+                    "A backup was created at sessions.json.bak.\n" +
+                    "Your sessions from the previous run could not be restored.",
+                    "Session Load Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            app.RestoredPersistedData = null;
+            return false;
+        }
+
+        if (restoreResult.Sessions.Count == 0)
+        {
+            FileLog.Write("[MainWindow] RestorePersistedSessions: No sessions to restore");
+            app.RestoredPersistedData = null;
+            return false;
+        }
+
+        sessions = restoreResult.Sessions;
+        return true;
+    }
+
+    private enum RestoreStatus { Success, RepoNotFound, CreateFailed }
+    private record SingleRestoreResult(RestoreStatus Status, string? FailureReason = null);
+
+    private SingleRestoreResult RestoreSingleSession(PersistedSession p)
+    {
+        string repoName = System.IO.Path.GetFileName(p.RepoPath.TrimEnd('\\', '/'));
+
+        if (!System.IO.Directory.Exists(p.RepoPath))
+        {
+            FileLog.Write($"[MainWindow] Skipping session {p.Id}: Repo path not found: {p.RepoPath}");
+            return new SingleRestoreResult(RestoreStatus.RepoNotFound, $"{repoName} (path not found)");
+        }
+
+        string? resumeSessionId = GetResumeSessionId(p);
+
+        try
+        {
+            var session = _sessionManager.CreateSession(p.RepoPath, null, SessionBackendType.ConPty, resumeSessionId);
+            if (session == null)
+                return new SingleRestoreResult(RestoreStatus.CreateFailed, $"{repoName} (create failed)");
+
+            session.CustomName = p.CustomName;
+            session.CustomColor = p.CustomColor;
+            session.HistoryEntryId = p.HistoryEntryId;
+
+            if (!string.IsNullOrEmpty(session.ClaudeSessionId))
+            {
+                session.MarkAsPreVerified();
+                session.VerifyClaudeSession();
+            }
+
+            session.OnTurnCompleted += OnSessionTurnCompleted;
+            var vm = new SessionViewModel(session, Dispatcher) { PendingPromptText = p.PendingPromptText ?? "" };
+            _sessions.Add(vm);
+
+            LoadSavedSummaries(session);
+
+            var resumeInfo = resumeSessionId != null ? $"Resume={resumeSessionId[..8]}..." : "Fresh start";
+            FileLog.Write($"[MainWindow] Restored session {session.Id} from {p.RepoPath} ({resumeInfo})");
+            return new SingleRestoreResult(RestoreStatus.Success);
+        }
+        catch (Exception ex)
+        {
+            FileLog.Write($"[MainWindow] Failed to restore session for {p.RepoPath}: {ex.Message}");
+            return new SingleRestoreResult(RestoreStatus.CreateFailed, $"{repoName} ({ex.Message})");
+        }
+    }
+
+    private static string? GetResumeSessionId(PersistedSession p)
+    {
+        if (string.IsNullOrEmpty(p.ClaudeSessionId))
+        {
+            FileLog.Write($"[MainWindow] Session {p.Id}: No ClaudeSessionId, starting fresh");
+            return null;
+        }
+
+        if (ClaudeSessionReader.SessionExists(p.ClaudeSessionId, p.RepoPath))
+            return p.ClaudeSessionId;
+
+        FileLog.Write($"[MainWindow] Session {p.Id}: ClaudeSessionId {p.ClaudeSessionId[..8]}... no longer exists, starting fresh");
+        return null;
+    }
+
+    private void HandleRestoreResults(App app, int totalCount, int restored, int totalFailed, List<string> failedRepos)
+    {
         if (totalFailed > 0)
         {
             var failedList = string.Join("\n  - ", failedRepos);
             MessageBox.Show(this,
-                $"Restored {restored} of {persisted.Count} sessions.\n\n" +
+                $"Restored {restored} of {totalCount} sessions.\n\n" +
                 $"{totalFailed} session(s) could not be restored:\n  - {failedList}\n\n" +
-                $"The sessions.json backup has been preserved.",
-                "Session Restore Warning",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+                "The sessions.json backup has been preserved.",
+                "Session Restore Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         if (restored > 0)
         {
             FileLog.Write($"[MainWindow] Restored {restored} session(s) from previous run");
 
-            // Only clear sessions.json if ALL sessions were restored successfully
-            // If any failed, keep the backup so user doesn't lose session data permanently
             if (totalFailed == 0)
             {
                 app.SessionStateStore.Clear();
@@ -412,32 +409,21 @@ public partial class MainWindow : Window
                 FileLog.Write($"[MainWindow] Keeping sessions.json - {totalFailed} session(s) failed to restore");
             }
 
-            app.RestoredPersistedData = null;
-
-            // Select first restored session
             if (_sessions.Count > 0)
-            {
                 SessionList.SelectedItem = _sessions[0];
-            }
 
-            // Persist the newly created sessions
             PersistSessionState();
+        }
+        else if (totalFailed > 0)
+        {
+            FileLog.Write("[MainWindow] No sessions restored but some failed - keeping sessions.json backup");
         }
         else
         {
-            // No sessions restored
-            if (totalFailed > 0)
-            {
-                // Some sessions existed but all failed - keep the backup
-                FileLog.Write("[MainWindow] No sessions restored but some failed - keeping sessions.json backup");
-            }
-            else
-            {
-                // No sessions with ClaudeSessionId - safe to clear
-                app.SessionStateStore.Clear();
-            }
-            app.RestoredPersistedData = null;
+            app.SessionStateStore.Clear();
         }
+
+        app.RestoredPersistedData = null;
     }
 
     private void BtnNewSession_Click(object sender, RoutedEventArgs e)
