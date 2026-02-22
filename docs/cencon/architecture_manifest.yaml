@@ -10,7 +10,7 @@ project:
   framework: ".NET 10"
   platform: "Windows 10/11 (WPF)"
 
-last_updated: "2026-02-21"
+last_updated: "2026-02-22"
 
 # C4 Level 1: System Context
 context:
