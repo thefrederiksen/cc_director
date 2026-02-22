@@ -1,5 +1,7 @@
 using CcDirector.Core.Backends;
+using CcDirector.Core.Input;
 using CcDirector.Core.Memory;
+using CcDirector.Core.Utilities;
 using CcDirector.Wpf.Controls;
 
 namespace CcDirector.Wpf.Backends;
@@ -14,6 +16,7 @@ public sealed class EmbeddedBackend : ISessionBackend
     private EmbeddedConsoleHost? _host;
     private bool _disposed;
     private string _status = "Not Started";
+    private string _workingDir = string.Empty;
 
     public int ProcessId => _host?.ProcessId ?? 0;
     public string Status => _status;
@@ -36,6 +39,16 @@ public sealed class EmbeddedBackend : ISessionBackend
     /// The underlying EmbeddedConsoleHost for direct access when needed.
     /// </summary>
     public EmbeddedConsoleHost? Host => _host;
+
+    /// <summary>
+    /// Working directory for the session. Used for creating temp files for large input.
+    /// Can be set after Reattach when the working directory is known.
+    /// </summary>
+    public string WorkingDir
+    {
+        get => _workingDir;
+        set => _workingDir = value;
+    }
 
     public event Action<string>? StatusChanged;
     public event Action<int>? ProcessExited;
@@ -76,6 +89,7 @@ public sealed class EmbeddedBackend : ISessionBackend
         if (_host != null)
             throw new InvalidOperationException("Backend already started.");
 
+        _workingDir = workingDir;
         SetStatus("Starting...");
 
         _host = new EmbeddedConsoleHost();
@@ -99,11 +113,26 @@ public sealed class EmbeddedBackend : ISessionBackend
     /// <summary>
     /// Send text to the embedded console using the two-tier approach
     /// (WriteConsoleInput with clipboard fallback).
+    /// For large text input, writes to a temp file and sends @filepath instead.
     /// </summary>
     public async Task SendTextAsync(string text)
     {
         if (_disposed || _host == null) return;
-        await _host.SendTextAsync(text);
+
+        string textToSend;
+        if (LargeInputHandler.IsLargeInput(text) && !string.IsNullOrEmpty(_workingDir))
+        {
+            // Write to temp file and send @filepath
+            var tempPath = LargeInputHandler.CreateTempFile(text, _workingDir);
+            textToSend = $"@{tempPath}";
+            FileLog.Write($"[EmbeddedBackend] Large input ({text.Length} chars), using temp file reference: {textToSend}");
+        }
+        else
+        {
+            textToSend = text;
+        }
+
+        await _host.SendTextAsync(textToSend);
     }
 
     /// <summary>

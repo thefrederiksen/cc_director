@@ -1,6 +1,8 @@
 using System.Text;
 using CcDirector.Core.ConPty;
+using CcDirector.Core.Input;
 using CcDirector.Core.Memory;
+using CcDirector.Core.Utilities;
 
 namespace CcDirector.Core.Backends;
 
@@ -15,6 +17,7 @@ public sealed class ConPtyBackend : ISessionBackend
     private CircularTerminalBuffer? _buffer;
     private bool _disposed;
     private string _status = "Not Started";
+    private string _workingDir = string.Empty;
 
     public int ProcessId => _processHost?.ProcessId ?? 0;
     public string Status => _status;
@@ -39,6 +42,7 @@ public sealed class ConPtyBackend : ISessionBackend
         if (_processHost != null)
             throw new InvalidOperationException("Backend already started.");
 
+        _workingDir = workingDir;
         SetStatus("Starting...");
 
         // Create ConPTY with terminal dimensions
@@ -70,7 +74,20 @@ public sealed class ConPtyBackend : ISessionBackend
     {
         if (_disposed || _processHost == null) return;
 
-        var textBytes = Encoding.UTF8.GetBytes(text);
+        string textToSend;
+        if (LargeInputHandler.IsLargeInput(text) && !string.IsNullOrEmpty(_workingDir))
+        {
+            // Write to temp file and send @filepath
+            var tempPath = LargeInputHandler.CreateTempFile(text, _workingDir);
+            textToSend = $"@{tempPath}";
+            FileLog.Write($"[ConPtyBackend] Large input ({text.Length} chars), using temp file reference: {textToSend}");
+        }
+        else
+        {
+            textToSend = text;
+        }
+
+        var textBytes = Encoding.UTF8.GetBytes(textToSend);
         _processHost.Write(textBytes);
 
         // Brief delay so TUI processes text before Enter
